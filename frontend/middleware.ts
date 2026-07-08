@@ -24,6 +24,12 @@ export async function middleware(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname
 
+  if (pathname === '/' && request.nextUrl.searchParams.has('code')) {
+    const callbackUrl = request.nextUrl.clone()
+    callbackUrl.pathname = '/auth/callback'
+    return NextResponse.redirect(callbackUrl)
+  }
+
   // Only protect dashboard and workspace routes
   if (pathname.startsWith('/dashboard') || pathname.startsWith('/workspace')) {
     const {
@@ -41,5 +47,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/workspace/:path*'],
+  matcher: ['/', '/dashboard/:path*', '/workspace/:path*'],
 }
