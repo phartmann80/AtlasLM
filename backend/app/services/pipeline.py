@@ -2,7 +2,9 @@ import fitz  # PyMuPDF
 import uuid
 import logging
 import asyncio
+import os
 import re
+import tempfile
 from typing import List, Dict, Any, Optional
 
 from sqlalchemy.orm import Session
@@ -185,6 +187,43 @@ class DocumentPipeline:
 
     # ------------------------------------------------------------------ #
     # Ingestion
+    def _blocks_to_pages(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        pages = []
+        for idx, block in enumerate(blocks):
+            text = (block.get("text") or "").strip()
+            if not text:
+                continue
+            page = {
+                "page_number": block.get("page") or idx + 1,
+                "content": text,
+            }
+            if block.get("timestamp") is not None:
+                page["timestamp"] = block.get("timestamp")
+            if block.get("sheet") is not None:
+                page["sheet"] = block.get("sheet")
+            pages.append(page)
+        return pages
+
+    def _parse_media_file(self, file_bytes, file_type, filename):
+        suffix = os.path.splitext(filename or "")[1]
+        if not suffix:
+            suffix = ".wav" if file_type == "audio" else ".png"
+
+        from .ingest.dispatcher import extract_blocks
+
+        tmp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+            return self._blocks_to_pages(extract_blocks(file_type, tmp_path))
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
     def _parse(self, file_bytes, file_type, filename, source_url=None):
         ft = file_type.lower()
         if ft == "pdf":
@@ -238,6 +277,8 @@ class DocumentPipeline:
                     "timestamp": seconds
                 })
             return sections
+        elif ft in ("audio", "image"):
+            return self._parse_media_file(file_bytes, ft, filename)
         else:
             return self.extract_text_from_txt_or_md(file_bytes, filename)
 

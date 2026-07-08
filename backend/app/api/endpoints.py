@@ -1,8 +1,9 @@
 import uuid
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import json
 import re
 
@@ -18,8 +19,9 @@ from ..schemas import (
     SynthesisNodeCreate, SynthesisNodeUpdate, SynthesisNodeOut, SynthesisInputCreate
 )
 from ..services.youtube_extract import (
-    extract_youtube_transcript, YouTubeExtractError,
+    extract_youtube_transcript, YouTubeExtractError, extract_video_id,
 )
+from ..services.ingest.youtube_loader import load_youtube
 from ..services.pipeline import DocumentPipeline
 from ..services.rag import RAGService
 from ..core.providers import provider_registry, ProviderError
@@ -77,6 +79,29 @@ def _normalize_public_url(raw_url: str) -> str:
     if not url.lower().startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
     return url
+
+
+def _format_seconds(seconds: float) -> str:
+    total = max(0, int(seconds or 0))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _blocks_to_transcript_markdown(blocks: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for block in blocks:
+        text = (block.get("text") or "").strip()
+        if not text:
+            continue
+        timestamp = block.get("timestamp")
+        if timestamp is not None:
+            lines.append(f"## [{_format_seconds(float(timestamp))}]")
+        lines.append(text)
+        lines.append("")
+    return "\n".join(lines).strip()
 
 
 # -- Workspace Endpoints -------------------------------------------------------
@@ -186,7 +211,7 @@ async def upload_document(
             detail="File size exceeds the maximum upload limit of 50MB.",
         )
 
-    filename = file.filename
+    filename = file.filename or "uploaded-source"
     filename_lower = filename.lower()
     if filename_lower.endswith(".pdf"):
         file_type = "pdf"
@@ -202,10 +227,14 @@ async def upload_document(
         file_type = "xlsx"
     elif filename_lower.endswith(".pptx"):
         file_type = "pptx"
+    elif filename_lower.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        file_type = "image"
+    elif filename_lower.endswith((".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")):
+        file_type = "audio"
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file format. Supported: PDF, DOCX, XLSX, PPTX, TXT, MD, CSV.",
+            detail="Invalid file format. Supported: PDF, DOCX, XLSX, PPTX, TXT, MD, CSV, PNG, JPG, WEBP, MP3, WAV, M4A, AAC, OGG, FLAC.",
         )
 
     pipeline = DocumentPipeline(db)
@@ -792,8 +821,28 @@ async def ingest_youtube(
 
     try:
         result = await extract_youtube_transcript(url)
-    except YouTubeExtractError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    except YouTubeExtractError as primary_error:
+        try:
+            blocks = await asyncio.to_thread(load_youtube, url)
+            transcript_text = _blocks_to_transcript_markdown(blocks)
+            if not transcript_text:
+                raise ValueError("No transcript text was produced.")
+            video_id = extract_video_id(url) or "video"
+            result = {
+                "text": transcript_text,
+                "title": f"YouTube {video_id}",
+                "video_id": video_id,
+                "language": "auto",
+            }
+        except Exception:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "AtlasLM could not extract or transcribe this YouTube video. "
+                    "It may be private, blocked, or the backend media transcription "
+                    f"tools may be unavailable. Caption error: {str(primary_error)}"
+                ),
+            )
 
     transcript_text = result["text"]
     filename = f"{result['title'][:200]} (YouTube)"

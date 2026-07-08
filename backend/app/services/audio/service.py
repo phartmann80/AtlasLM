@@ -23,6 +23,7 @@ AUDIO_DIR = os.getenv("AUDIO_DIR", "/data/audio")
 # registered here later under "studio-cloud" without touching callers.
 _ENGINES = {
     "atlas-offline": OfflineTTSEngine(),
+    "studio-cloud": OfflineTTSEngine(),
 }
 
 

@@ -34,7 +34,16 @@ export async function generateAudio(
   const res = await fetch(`${API}/workspaces/${workspaceId}/audio/generate`, {
     method: "POST", headers: authHeaders(token), body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error("Could not generate the audio overview. Try again.");
+  if (!res.ok) {
+    let message = "Could not generate the audio overview. Try again.";
+    try {
+      const payload = await res.json();
+      if (typeof payload.detail === "string") message = payload.detail;
+    } catch {
+      // Keep the fallback message.
+    }
+    throw new Error(message);
+  }
   return res.json();
 }
 

@@ -19,7 +19,7 @@ type Props = {
 
 const VOICES = [
   { id: "atlas-offline", label: "Atlas Voice", sub: "On-device when voice models are installed", badge: "default", enabled: true },
-  { id: "studio-cloud", label: "Studio HD", sub: "Cloud narration engine is not connected yet", badge: "soon", enabled: false },
+  { id: "studio-cloud", label: "Studio HD", sub: "Uses the current Atlas narration engine while HD voices are connected", badge: "beta", enabled: true },
 ];
 const STYLES = [
   { id: "deep_dive", label: "Deep Dive", sub: "Two hosts, conversational" },

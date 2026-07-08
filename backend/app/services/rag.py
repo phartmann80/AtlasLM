@@ -44,6 +44,20 @@ class RAGService:
                 "You're welcome. I can help you analyze your sources "
                 "whenever you're ready."
             )
+        capability_markers = (
+            "what can you do",
+            "what are your capabilities",
+            "capabilities",
+            "help",
+        )
+        if any(marker in normalized for marker in capability_markers):
+            return (
+                "Atlas AI can answer questions about your notebook, summarize "
+                "ready sources with citations, compare source claims, draft notes, "
+                "and help generate study guides, quizzes, flashcards, maps, and "
+                "audio overview scripts. Add or index at least one source for "
+                "grounded answers."
+            )
         if cls.GREETING_PATTERN.match(user_message):
             return "Hello. How can I help you with your research today?"
         return None
@@ -273,17 +287,20 @@ class RAGService:
             yield "event: end\ndata: [DONE]\n\n"
             return
 
-        # 3. Empty-workspace guard (proper UX instead of grounding failure text)
-        doc_count = (
+        # 3. Empty-ready-source guard (failed or indexing docs cannot ground chat)
+        ready_query = (
             self.db.query(Document)
             .filter(Document.workspace_id == workspace_id)
-            .count()
+            .filter(Document.status == "ready")
         )
-        if doc_count == 0:
+        if scope_doc_ids is not None:
+            ready_query = ready_query.filter(Document.id.in_(scope_doc_ids))
+        ready_doc_count = ready_query.count()
+        if ready_doc_count == 0:
             msg = (
-                "You haven't added any sources to this notebook yet. "
-                "Upload a document, paste text, or add a website URL, "
-                "and I'll answer questions grounded in your sources."
+                "I can answer quick AtlasLM questions right now, but grounded "
+                "research answers need at least one ready source. Add a document, "
+                "paste text, or wait for indexing to finish, then ask again."
             )
             yield self._sse("data", {"type": "chunk", "content": msg})
             self._save_assistant(session_id, msg, [])

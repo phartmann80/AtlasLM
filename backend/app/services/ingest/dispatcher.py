@@ -24,7 +24,8 @@ EXT_MAP = {
     ".pptx": "pptx",
     ".xlsx": "xlsx", ".csv": "xlsx",
     ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image",
-    ".mp3": "audio", ".wav": "audio", ".m4a": "audio", ".ogg": "audio",
+    ".mp3": "audio", ".wav": "audio", ".m4a": "audio", ".aac": "audio",
+    ".ogg": "audio", ".flac": "audio",
 }
 
 

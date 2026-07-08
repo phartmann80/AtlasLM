@@ -11,10 +11,12 @@ import {
   Database,
   FileText,
   Globe,
+  ImageIcon,
   Layers3,
   Loader2,
   Map,
   MessageSquare,
+  Mic,
   Network,
   Plus,
   Search,
@@ -105,6 +107,8 @@ function normalizeStatus(status?: string): DocumentSource["status"] {
 function sourceIcon(type: string) {
   const kind = type.toLowerCase();
   if (kind.includes("youtube")) return Video;
+  if (kind.includes("audio")) return Mic;
+  if (kind.includes("image")) return ImageIcon;
   if (kind.includes("url") || kind.includes("web")) return Globe;
   return FileText;
 }
@@ -113,6 +117,8 @@ function sourceTone(type: string) {
   const kind = type.toLowerCase();
   if (kind.includes("pdf")) return "text-rose-300 bg-rose-500/10 border-rose-500/20";
   if (kind.includes("youtube")) return "text-red-300 bg-red-500/10 border-red-500/20";
+  if (kind.includes("audio")) return "text-emerald-300 bg-emerald-500/10 border-emerald-500/20";
+  if (kind.includes("image")) return "text-orange-300 bg-orange-500/10 border-orange-500/20";
   if (kind.includes("csv") || kind.includes("xlsx")) return "text-emerald-300 bg-emerald-500/10 border-emerald-500/20";
   if (kind.includes("url") || kind.includes("web")) return "text-sky-300 bg-sky-500/10 border-sky-500/20";
   return "text-violet-300 bg-violet-500/10 border-violet-500/20";
@@ -195,7 +201,18 @@ export default function Dashboard() {
   }, [sources, sourceFilter]);
 
   const getErrorMessage = (err: unknown, fallback: string) => {
-    if (err instanceof Error && err.message) return err.message;
+    if (err instanceof Error && err.message) {
+      const jsonMatch = err.message.match(/(\{.*\})/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[1]);
+          if (typeof parsed.detail === "string") return parsed.detail;
+        } catch {
+          // Keep the original message below.
+        }
+      }
+      return err.message;
+    }
     return fallback;
   };
 
@@ -425,44 +442,48 @@ export default function Dashboard() {
           if (!cleanLine.startsWith("data: ")) continue;
           const dataStr = cleanLine.slice(6).trim();
           if (dataStr === "[DONE]") break;
+          let payload: any;
           try {
-            const payload = JSON.parse(dataStr);
-            if (payload.type === "metadata") {
-              citationsMapRef.current = payload.sources || {};
-              setCitationsMap(payload.sources || {});
-            } else if (payload.type === "chunk") {
-              streamingAccumRef.current += payload.content;
-              setStreamingText(streamingAccumRef.current);
-            } else if (payload.error) {
-              throw new Error(payload.error);
-            }
+            payload = JSON.parse(dataStr);
           } catch (err) {
             console.error("Stream parse failed", err);
+            continue;
+          }
+          if (payload.type === "metadata") {
+            citationsMapRef.current = payload.sources || {};
+            setCitationsMap(payload.sources || {});
+          } else if (payload.type === "chunk") {
+            streamingAccumRef.current += payload.content || "";
+            setStreamingText(streamingAccumRef.current);
+          } else if (payload.type === "error" || payload.error) {
+            throw new Error(payload.error || payload.content || "Atlas AI could not complete that request.");
           }
         }
       }
 
+      const finalContent = streamingAccumRef.current.trim() || "Atlas AI did not return a response. Please try again.";
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: streamingAccumRef.current,
+          content: finalContent,
           citations: Object.values(citationsMapRef.current),
         },
       ]);
       setStreamingText("");
       setUiError("");
     } catch (err) {
+      const message = getErrorMessage(err, "Atlas AI could not complete that request.");
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: "AtlasLM could not complete that request. Check the source set and try again.",
+          content: message,
         },
       ]);
-      setUiError(getErrorMessage(err, "Chat request failed."));
+      setUiError(message);
     } finally {
       setChatLoading(false);
     }
@@ -817,7 +838,7 @@ export default function Dashboard() {
 
         <div className="grid min-h-0 flex-1 gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_290px]">
           <div
-            className="relative min-h-[520px] overflow-hidden rounded border border-zinc-800 bg-[#08090b]"
+            className="relative min-h-[520px] overflow-y-auto overflow-x-hidden rounded border border-zinc-800 bg-[#08090b]"
             style={{
               backgroundImage: "radial-gradient(circle at 1px 1px, rgba(113,113,122,0.22) 1px, transparent 0)",
               backgroundSize: "28px 28px",
@@ -852,8 +873,8 @@ export default function Dashboard() {
                 </div>
               </div>
             ) : (
-              <div className="grid h-full min-h-[520px] grid-cols-[minmax(0,1fr)_180px_minmax(0,1fr)] gap-5 p-6 max-lg:grid-cols-1">
-                <div className="flex flex-col justify-center gap-3">
+              <div className="grid min-h-[520px] grid-cols-1 gap-5 p-5 2xl:grid-cols-[minmax(180px,1fr)_220px_minmax(180px,1fr)] 2xl:p-6">
+                <div className="flex min-w-0 flex-col gap-3 2xl:justify-center">
                   <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Sources</div>
                   {visibleSources.map((source) => {
                     const Icon = sourceIcon(source.file_type);
@@ -879,7 +900,7 @@ export default function Dashboard() {
                   )}
                 </div>
 
-                <div className="flex items-center justify-center">
+                <div className="flex min-w-0 items-center justify-center">
                   <div className="w-full rounded border border-emerald-400/25 bg-emerald-400/10 p-5 text-center">
                     <Sparkles className="mx-auto h-7 w-7 text-emerald-200" />
                     <div className="mt-3 text-base font-semibold text-white">AtlasLM Notebook</div>
@@ -896,7 +917,7 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                <div className="flex flex-col justify-center gap-3">
+                <div className="flex min-w-0 flex-col gap-3 2xl:justify-center">
                   <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Outputs</div>
                   {visibleOutputs.length > 0 ? (
                     visibleOutputs.map((output) => (
@@ -907,7 +928,7 @@ export default function Dashboard() {
                           setOpenOutput(output);
                           setView("studio");
                         }}
-                        className="rounded border border-zinc-800 bg-zinc-950/90 p-3 text-left hover:bg-zinc-900"
+                        className="min-w-0 rounded border border-zinc-800 bg-zinc-950/90 p-3 text-left hover:bg-zinc-900"
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
@@ -932,10 +953,11 @@ export default function Dashboard() {
                           key={card.id}
                           type="button"
                           onClick={() => generateStudioOutput(card.id)}
-                          className="rounded border border-zinc-800 bg-zinc-950/90 p-3 text-left hover:bg-zinc-900"
+                          className="min-w-0 rounded border border-zinc-800 bg-zinc-950/90 p-3 text-left hover:bg-zinc-900"
                         >
                           <Icon className="h-4 w-4 text-zinc-300" />
-                          <div className="mt-2 text-sm font-medium text-white">Generate {card.label}</div>
+                          <div className="mt-2 text-sm font-medium text-white">{card.label}</div>
+                          <div className="mt-1 text-xs text-zinc-500">Generate</div>
                         </button>
                       );
                     })
@@ -1207,24 +1229,28 @@ export default function Dashboard() {
                 {messages.length === 0 && !streamingText ? (
                   renderAskEmptyState()
                 ) : (
-                  <div className="mx-auto flex max-w-4xl flex-col gap-5">
+                  <div className="mx-auto flex max-w-4xl flex-col overflow-hidden rounded border border-zinc-900 bg-zinc-950/30">
                     {messages.map((message) => {
                       const isUser = message.role === "user";
                       return (
-                        <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-                          <div className={`max-w-[82%] rounded border p-4 text-sm leading-6 ${
-                            isUser
-                              ? "border-zinc-700 bg-zinc-100 text-zinc-950"
-                              : "border-zinc-800 bg-zinc-950/80 text-zinc-200"
-                          }`}>
+                        <div key={message.id} className="border-b border-zinc-900 p-4 last:border-b-0">
+                          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            <span className={`h-2 w-2 rounded-full ${isUser ? "bg-zinc-400" : "bg-emerald-300"}`} />
+                            {isUser ? "You" : "Atlas AI"}
+                          </div>
+                          <div className="text-sm leading-6 text-zinc-100">
                             {isUser ? message.content : renderMessageContent(message.content, message.citations)}
                           </div>
                         </div>
                       );
                     })}
                     {streamingText && (
-                      <div className="flex justify-start">
-                        <div className="max-w-[82%] rounded border border-zinc-800 bg-zinc-950/80 p-4 text-sm leading-6 text-zinc-200">
+                      <div className="border-b border-zinc-900 p-4 last:border-b-0">
+                        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                          <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                          Atlas AI
+                        </div>
+                        <div className="text-sm leading-6 text-zinc-100">
                           {renderMessageContent(streamingText)}
                           <span className="ml-1 inline-block h-4 w-1 animate-pulse bg-emerald-300 align-middle" />
                         </div>

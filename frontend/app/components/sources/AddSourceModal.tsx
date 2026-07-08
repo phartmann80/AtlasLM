@@ -57,7 +57,7 @@ export default function AddSourceModal({
     return /(^|\.)youtube\.com|(^|\.)youtu\.be/i.test(value);
   }
 
-  function handleFileClick(type: "pdf" | "docx" | "xlsx" | "pptx") {
+  function handleFileClick(type: "pdf" | "docx" | "xlsx" | "pptx" | "audio" | "image") {
     if (type === "pdf") {
       setAcceptTypes(".pdf");
     } else if (type === "docx") {
@@ -66,6 +66,10 @@ export default function AddSourceModal({
       setAcceptTypes(".xlsx,.csv");
     } else if (type === "pptx") {
       setAcceptTypes(".pptx");
+    } else if (type === "audio") {
+      setAcceptTypes(".mp3,.wav,.m4a,.aac,.ogg,.flac");
+    } else if (type === "image") {
+      setAcceptTypes(".png,.jpg,.jpeg,.webp");
     }
     setErr(null);
     setTimeout(() => {
@@ -88,6 +92,7 @@ export default function AddSourceModal({
       setErr(cleanErrorMessage(error));
     } finally {
       setBusy(false);
+      e.target.value = "";
     }
   }
 
@@ -328,7 +333,7 @@ export default function AddSourceModal({
                   </div>
                 </button>
 
-                <div className="src-row soon">
+                <button className="src-row" onClick={() => handleFileClick("audio")}>
                   <div className="src-ic">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
@@ -337,12 +342,11 @@ export default function AddSourceModal({
                   </div>
                   <div>
                     <div className="sr-name">Audio</div>
-                    <div className="sr-desc">MP3, WAV transcription</div>
+                    <div className="sr-desc">MP3, WAV, M4A transcription</div>
                   </div>
-                  <span className="soon-badge">SOON</span>
-                </div>
+                </button>
 
-                <div className="src-row soon">
+                <button className="src-row" onClick={() => handleFileClick("image")}>
                   <div className="src-ic">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fb923c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -352,10 +356,9 @@ export default function AddSourceModal({
                   </div>
                   <div>
                     <div className="sr-name">Image</div>
-                    <div className="sr-desc">PNG, JPG with OCR</div>
+                    <div className="sr-desc">PNG, JPG, WEBP with OCR</div>
                   </div>
-                  <span className="soon-badge">SOON</span>
-                </div>
+                </button>
               </div>
             </>
           ) : (
@@ -424,7 +427,7 @@ export default function AddSourceModal({
               {active === "youtube" && (
                 <>
                   <h2>Ingest YouTube</h2>
-                  <p className="sub">Paste a YouTube link. AtlasLM will transcribe the video captions.</p>
+                  <p className="sub">Paste a YouTube link. AtlasLM tries captions first, then backend media transcription.</p>
                   <div className="mt-4 flex flex-col gap-3">
                     <input
                       type="text"

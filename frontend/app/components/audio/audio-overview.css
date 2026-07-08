@@ -28,6 +28,7 @@
 .ao-tag { font-size:9px; padding:1px 6px; border-radius:5px; text-transform:lowercase; }
 .ao-tag-default { background:rgba(236,72,153,.15); color:#F9A8D4; }
 .ao-tag-premium { background:rgba(234,179,8,.15); color:#EAB308; }
+.ao-tag-beta { background:rgba(34,211,238,.14); color:#67E8F9; }
 .ao-tag-soon { background:rgba(113,113,122,.22); color:#A1A1AA; }
 
 .ao-generate { height:44px; border:none; border-radius:12px; cursor:pointer;

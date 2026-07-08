@@ -38,7 +38,7 @@ def load_youtube(url: str) -> List[ExtractedBlock]:
     # 2) Whisper fallback (download audio -> offline transcription)
     from .audio_loader import transcribe_audio
     with tempfile.TemporaryDirectory() as tmp:
-        out = os.path.join(tmp, "audio.m4a")
+        out = os.path.join(tmp, "audio.%(ext)s")
         import yt_dlp
         ydl_opts = {
             "format": "bestaudio/best",
@@ -49,7 +49,7 @@ def load_youtube(url: str) -> List[ExtractedBlock]:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         # yt-dlp may append an extension; find the produced file
-        produced = out if os.path.exists(out) else next(
-            (os.path.join(tmp, f) for f in os.listdir(tmp)), out
-        )
+        produced = next((os.path.join(tmp, f) for f in os.listdir(tmp)), "")
+        if not produced:
+            raise ValueError("No audio file was downloaded for transcription.")
         return transcribe_audio(produced)
