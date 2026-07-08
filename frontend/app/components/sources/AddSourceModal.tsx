@@ -14,7 +14,7 @@ export default function AddSourceModal({
   onClose: () => void;
   onAdded?: (result: any) => void;
 }) {
-  const [active, setActive] = useState<"website" | "youtube" | "paste" | null>(null);
+  const [active, setActive] = useState<"link" | "website" | "youtube" | "paste" | null>(null);
   const [url, setUrl] = useState("");
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteContent, setPasteContent] = useState("");
@@ -27,7 +27,7 @@ export default function AddSourceModal({
 
   function cleanErrorMessage(error: any): string {
     const msg = error?.message || "";
-    if (msg.includes(" -> ") || msg.includes(" : ") || msg.includes("status:")) {
+    if (msg.includes(" -> ") || msg.includes("→") || msg.includes(" : ") || msg.includes("status:")) {
       try {
         const jsonMatch = msg.match(/(\{.*\})/);
         if (jsonMatch) {
@@ -44,6 +44,17 @@ export default function AddSourceModal({
       }
     }
     return msg || "AtlasLM could not ingest this source.";
+  }
+
+  function normalizeUrlInput(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
+    return `https://${trimmed}`;
+  }
+
+  function isYouTubeUrl(value: string): boolean {
+    return /(^|\.)youtube\.com|(^|\.)youtu\.be/i.test(value);
   }
 
   function handleFileClick(type: "pdf" | "docx" | "xlsx" | "pptx") {
@@ -85,7 +96,7 @@ export default function AddSourceModal({
     setBusy(true);
     setErr(null);
     try {
-      const res = await apiClient.post<any>(`/api/v1/workspaces/${notebookId}/documents/url`, { url: url.trim() });
+      const res = await apiClient.post<any>(`/api/v1/workspaces/${notebookId}/documents/url`, { url: normalizeUrlInput(url) });
       onAdded?.(res);
       onClose();
     } catch (error: any) {
@@ -100,7 +111,7 @@ export default function AddSourceModal({
     setBusy(true);
     setErr(null);
     try {
-      const res = await apiClient.post<any>(`/api/v1/workspaces/${notebookId}/documents/youtube`, { url: url.trim() });
+      const res = await apiClient.post<any>(`/api/v1/workspaces/${notebookId}/documents/youtube`, { url: normalizeUrlInput(url) });
       onAdded?.(res);
       onClose();
     } catch (error: any) {
@@ -108,6 +119,29 @@ export default function AddSourceModal({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function ingestLinkValue(rawUrl: string) {
+    if (!rawUrl.trim()) return;
+    setBusy(true);
+    setErr(null);
+    const normalized = normalizeUrlInput(rawUrl);
+    try {
+      const path = isYouTubeUrl(normalized)
+        ? `/api/v1/workspaces/${notebookId}/documents/youtube`
+        : `/api/v1/workspaces/${notebookId}/documents/url`;
+      const res = await apiClient.post<any>(path, { url: normalized });
+      onAdded?.(res);
+      onClose();
+    } catch (error: any) {
+      setErr(cleanErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleLinkSubmit() {
+    await ingestLinkValue(url);
   }
 
   async function handlePasteSubmit() {
@@ -164,18 +198,21 @@ export default function AddSourceModal({
                 </svg>
                 <input
                   type="text"
-                  placeholder="Find sources from the web"
+                  placeholder="Paste any link to ingest"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      setErr("Web search is coming soon.");
+                      e.preventDefault();
+                      ingestLinkValue(searchQuery);
                     }
                   }}
+                  disabled={busy}
                 />
                 <button
                   className="go"
-                  onClick={() => setErr("Web search is coming soon.")}
+                  disabled={busy || !searchQuery.trim()}
+                  onClick={() => ingestLinkValue(searchQuery)}
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M22 2L11 13M22 2l-7 20-4-9-9-4z" />
@@ -236,6 +273,19 @@ export default function AddSourceModal({
                   <div>
                     <div className="sr-name">Slides</div>
                     <div className="sr-desc">PPTX presentations</div>
+                  </div>
+                </button>
+
+                <button className="src-row" onClick={() => { setActive("link"); setErr(null); setUrl(""); }}>
+                  <div className="src-ic">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
+                      <path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="sr-name">Link or video</div>
+                    <div className="sr-desc">Web pages and YouTube transcripts</div>
                   </div>
                 </button>
 
@@ -320,16 +370,43 @@ export default function AddSourceModal({
                 <span>Back to sources list</span>
               </button>
 
-              {active === "website" && (
+              {active === "link" && (
                 <>
-                  <h2>Ingest Website</h2>
-                  <p className="sub">Paste a website page URL to parse its content.</p>
+                  <h2>Ingest Link or Video</h2>
+                  <p className="sub">Paste a public URL. AtlasLM currently ingests web pages and YouTube transcripts through the live backend.</p>
                   <div className="mt-4 flex flex-col gap-3">
                     <input
                       type="text"
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
-                      placeholder="https://example.com/article"
+                      placeholder="example.com/article or youtube.com/watch?v=..."
+                      className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 transition-colors"
+                      disabled={busy}
+                    />
+                    <button
+                      disabled={busy || !url.trim()}
+                      onClick={handleLinkSubmit}
+                      className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold py-3 rounded-lg text-xs tracking-wider uppercase transition-colors"
+                    >
+                      {busy ? "Ingesting..." : "Ingest link"}
+                    </button>
+                  </div>
+                  <p className="mt-3 text-[11px] leading-5 text-zinc-500">
+                    Instagram, TikTok, LinkedIn, and other social video transcription still need the generic media transcription backend.
+                  </p>
+                </>
+              )}
+
+              {active === "website" && (
+                <>
+                  <h2>Ingest Website</h2>
+                  <p className="sub">Paste a website page URL to parse its content. Bare domains are accepted.</p>
+                  <div className="mt-4 flex flex-col gap-3">
+                    <input
+                      type="text"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      placeholder="example.com/article"
                       className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 transition-colors"
                       disabled={busy}
                     />

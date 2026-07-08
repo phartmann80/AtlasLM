@@ -676,7 +676,7 @@ export default function Dashboard() {
   const renderAskEmptyState = () => {
     if (readySources.length === 0) {
       return (
-        <div className="mx-auto grid max-w-5xl gap-5 pt-10 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="mx-auto grid max-w-4xl gap-5 pt-8">
           <div className="rounded border border-zinc-800 bg-zinc-950/70 p-6">
             <div className="flex items-start gap-4">
               <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
@@ -691,7 +691,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="mt-6 grid gap-3 md:grid-cols-3">
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
               <button
                 type="button"
                 onClick={() => setShowAddSource(true)}
@@ -727,7 +727,7 @@ export default function Dashboard() {
 
           <div className="rounded border border-zinc-800 bg-zinc-950/60 p-5">
             <h2 className="text-sm font-semibold text-white">What unlocks after indexing</h2>
-            <div className="mt-4 space-y-4">
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
               {[
                 ["Grounded Q&A", "Ask questions with inline source citations."],
                 ["Studio outputs", "Generate study guides, quizzes, flashcards, and maps."],
@@ -1236,22 +1236,45 @@ export default function Dashboard() {
               </div>
 
               <div className="shrink-0 border-t border-zinc-900 bg-[#0b0c0f] p-4">
-                <form onSubmit={(event) => handleSendChatMessage(event)} className="mx-auto flex max-w-4xl items-center gap-3">
-                  <input
-                    value={chatInput}
-                    onChange={(event) => setChatInput(event.target.value)}
-                    disabled={chatLoading || readySources.length === 0}
-                    placeholder={readySources.length === 0 ? "Add sources before asking" : "Ask a cited question"}
-                    className="h-12 min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-950 px-4 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600 disabled:opacity-50"
-                  />
-                  <button
-                    type="submit"
-                    disabled={chatLoading || !chatInput.trim() || readySources.length === 0}
-                    className="flex h-12 w-12 items-center justify-center rounded bg-emerald-300 text-zinc-950 hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
-                    title="Send"
-                  >
-                    {chatLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-                  </button>
+                <form onSubmit={(event) => handleSendChatMessage(event)} className="mx-auto max-w-4xl rounded border border-zinc-800 bg-zinc-950/80 p-3">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-8 w-8 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
+                        <Bot className="h-4 w-4" />
+                      </span>
+                      <div>
+                        <div className="text-sm font-semibold text-white">Atlas AI</div>
+                        <div className="text-xs text-zinc-500">
+                          {readySources.length > 0 ? "Ask across this notebook with citations." : "Say hi now, or add sources for grounded answers."}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="hidden rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-500 sm:inline">
+                      {readySources.length} sources
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input
+                      value={chatInput}
+                      onChange={(event) => setChatInput(event.target.value)}
+                      disabled={chatLoading || !selectedSessionId}
+                      placeholder={readySources.length === 0 ? "Say hi, or add sources for grounded questions" : "Ask Atlas AI a cited question"}
+                      className="h-12 min-w-0 flex-1 rounded border border-zinc-800 bg-[#090a0d] px-4 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600 disabled:opacity-50"
+                    />
+                    <button
+                      type="submit"
+                      disabled={chatLoading || !chatInput.trim() || !selectedSessionId}
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-emerald-300 text-zinc-950 hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
+                      title="Send"
+                    >
+                      {chatLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+                    </button>
+                  </div>
+                  {readySources.length === 0 && (
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Atlas AI can greet you immediately. Source-grounded answers, Studio, and audio unlock after a source is indexed.
+                    </p>
+                  )}
                 </form>
               </div>
             </section>

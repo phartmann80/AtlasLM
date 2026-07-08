@@ -84,6 +84,7 @@ class ChatSessionDetailsOut(ChatSessionOut):
 # Ingestion URL Schema
 class URLIngestRequest(BaseModel):
     url: str
+    language: Optional[str] = None
     provider: Optional[str] = None
 
 class TextIngestRequest(BaseModel):

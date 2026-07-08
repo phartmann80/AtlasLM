@@ -68,6 +68,17 @@ def _get_owned_workspace(workspace_id: uuid.UUID, user_id: str, db: Session) -> 
     return ws
 
 
+def _normalize_public_url(raw_url: str) -> str:
+    url = raw_url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
+        url = f"https://{url}"
+    if not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+    return url
+
+
 # -- Workspace Endpoints -------------------------------------------------------
 
 @router.get("/workspaces", response_model=List[WorkspaceOut])
@@ -255,9 +266,7 @@ async def ingest_url(
     uid = current_user_id(request)
     _get_owned_workspace(workspace_id, uid, db)
 
-    url = str(body.url).strip()
-    if not url.lower().startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+    url = _normalize_public_url(str(body.url))
 
     filename = url.replace("https://", "").replace("http://", "").split("/")[0] + " (Web)"
 
@@ -526,6 +535,7 @@ def get_available_providers():
     """Returns AtlasLM engine availability. Internal provider names are never exposed."""
     cloud_active = bool(
         settings.LANGDOCK_API_KEY
+        or settings.LANGDOCK_API_CODE
         or settings.OPENROUTER_API_KEY
         or settings.OPENAI_API_KEY
         or settings.BLACKBOX_API_KEY
@@ -778,7 +788,7 @@ async def ingest_youtube(
     uid = current_user_id(request)
     _get_owned_workspace(workspace_id, uid, db)
 
-    url = str(body.url).strip()
+    url = _normalize_public_url(str(body.url))
 
     try:
         result = await extract_youtube_transcript(url)
@@ -1088,10 +1098,29 @@ def audio_generate(workspace_id: uuid.UUID, body: AudioGenerateRequest,
     _get_owned_workspace(workspace_id, uid, db)
     if not body.title.strip():
         raise HTTPException(400, "title is required")
-    ov = _audio.generate(
-        db, str(workspace_id), title=body.title, style=body.style,
-        voice=body.voice, doc_ids=body.doc_ids,
+    ready_query = db.query(Document).filter(
+        Document.workspace_id == workspace_id,
+        Document.status == "ready",
     )
+    if body.doc_ids:
+        ready_query = ready_query.filter(Document.id.in_(body.doc_ids))
+    if ready_query.count() == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least one ready source before generating an audio overview.",
+        )
+    try:
+        ov = _audio.generate(
+            db, str(workspace_id), title=body.title, style=body.style,
+            voice=body.voice, doc_ids=body.doc_ids,
+        )
+    except ProviderError as e:
+        raise HTTPException(status_code=503, detail=e.public_message)
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="AtlasLM could not generate the audio overview. Please try again.",
+        )
     db.commit()
     return {
         "overview_id": ov.overview_id,

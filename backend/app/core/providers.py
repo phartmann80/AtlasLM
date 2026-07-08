@@ -387,15 +387,18 @@ class ProviderRegistry:
         self._llms = {}
         self._embeddings = {}
 
-        if settings.LANGDOCK_API_KEY:
+        langdock_api_key = settings.LANGDOCK_API_KEY or settings.LANGDOCK_API_CODE
+        langdock_model = settings.LANGDOCK_MODEL or settings.MODEL or "gpt-5-mini"
+
+        if langdock_api_key:
             self._llms["langdock"] = OpenAICompatibleLLM(
                 base_url=settings.LANGDOCK_ENDPOINT_URL,
-                api_key=settings.LANGDOCK_API_KEY,
-                model="gpt-5-mini",
+                api_key=langdock_api_key,
+                model=langdock_model,
             )
             self._embeddings["langdock"] = OpenAICompatibleEmbedding(
                 base_url=settings.LANGDOCK_ENDPOINT_URL,
-                api_key=settings.LANGDOCK_API_KEY,
+                api_key=langdock_api_key,
                 model="text-embedding-ada-002",
             )
 

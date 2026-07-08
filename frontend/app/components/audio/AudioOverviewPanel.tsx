@@ -18,8 +18,8 @@ type Props = {
 };
 
 const VOICES = [
-  { id: "atlas-offline", label: "Atlas Voice", sub: "On-device, free and unlimited", badge: "default" },
-  { id: "studio-cloud", label: "Studio HD", sub: "Cloud, studio-grade narration", badge: "premium" },
+  { id: "atlas-offline", label: "Atlas Voice", sub: "On-device when voice models are installed", badge: "default", enabled: true },
+  { id: "studio-cloud", label: "Studio HD", sub: "Cloud narration engine is not connected yet", badge: "soon", enabled: false },
 ];
 const STYLES = [
   { id: "deep_dive", label: "Deep Dive", sub: "Two hosts, conversational" },
@@ -49,7 +49,13 @@ export default function AudioOverviewPanel({ workspaceId, token, docIds }: Props
 
   useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
 
+  const hasSources = Boolean(docIds?.length);
+
   async function onGenerate() {
+    if (!hasSources) {
+      setError("Add at least one ready source before generating an audio overview.");
+      return;
+    }
     setError(null);
     setPhase("generating");
     try {
@@ -106,7 +112,7 @@ export default function AudioOverviewPanel({ workspaceId, token, docIds }: Props
           <div className="ao-hero">
             <div className="ao-hero-icon" aria-hidden>🎧</div>
             <h3>Audio Overview</h3>
-            <p>Two hosts turn your sources into a short, listenable conversation. Generated on-device and grounded in your selected sources.</p>
+          <p>Two hosts turn your ready sources into a short, listenable conversation grounded in the selected notebook material.</p>
           </div>
 
           <div className="ao-field">
@@ -114,7 +120,7 @@ export default function AudioOverviewPanel({ workspaceId, token, docIds }: Props
             {VOICES.map((v) => (
               <button key={v.id} type="button"
                 className={`ao-opt ${voice === v.id ? "is-sel" : ""}`}
-                disabled={phase === "generating"} onClick={() => setVoice(v.id)}>
+                disabled={phase === "generating" || !v.enabled} onClick={() => setVoice(v.id)}>
                 <span className="ao-opt-main">
                   {v.label}
                   <span className={`ao-tag ao-tag-${v.badge}`}>{v.badge}</span>
@@ -141,10 +147,14 @@ export default function AudioOverviewPanel({ workspaceId, token, docIds }: Props
           {error && <p className="ao-error">{error}</p>}
 
           <button type="button" className="ao-generate"
-            disabled={phase === "generating"} onClick={onGenerate}>
+            disabled={phase === "generating" || !hasSources} onClick={onGenerate}>
             {phase === "generating" ? "Generating..." : "Generate Audio Overview"}
           </button>
-          <p className="ao-note">Atlas Voice runs on-device, so you can generate as many overviews as you want at no cost.</p>
+          <p className="ao-note">
+            {hasSources
+              ? "Atlas Voice runs on-device when voice models are available; otherwise the backend returns a timed transcript track."
+              : "Audio generation unlocks after a source finishes indexing."}
+          </p>
         </div>
       ) : (
         <div className="ao-player-wrap">

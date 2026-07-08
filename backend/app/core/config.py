@@ -27,11 +27,14 @@ class Settings(BaseSettings):
     
     # Model APIs
     LANGDOCK_API_KEY: str = Field(default="", env="LANGDOCK_API_KEY")
+    LANGDOCK_API_CODE: str = Field(default="", env="LANGDOCK_API_CODE")
     LANGDOCK_ENDPOINT_URL: str = Field(
         default="https://api.langdock.com/openai/eu/v1",
         env="LANGDOCK_ENDPOINT_URL"
     )
     LANGDOCK_WORKSPACE_ID: str = Field(default="", env="LANGDOCK_WORKSPACE_ID")
+    LANGDOCK_MODEL: str = Field(default="gpt-5-mini", env="LANGDOCK_MODEL")
+    MODEL: str = Field(default="", env="MODEL")
     
     BLACKBOX_API_KEY: str = Field(default="", env="BLACKBOX_API_KEY")
     
