@@ -1,25 +1,133 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import {
+  AlertTriangle,
+  Bot,
+  BookOpen,
+  CheckCircle2,
+  ChevronRight,
+  Database,
+  FileText,
+  Globe,
+  Layers3,
+  Loader2,
+  Map,
+  MessageSquare,
+  Network,
+  Plus,
+  Search,
+  Send,
+  Sparkles,
+  Trash2,
+  Upload,
+  Video,
+  Wand2,
+} from "lucide-react";
 import Logo from "../../components/brand/logo";
+import UserMenu from "../../components/UserMenu";
 import { apiClient } from "@/lib/apiClient";
 import { supabaseBrowser, getCurrentProfile } from "@/lib/supabaseClient";
-import StudioPanel from "@/app/components/studio/StudioPanel";
 import AddSourceModal from "@/app/components/sources/AddSourceModal";
 import DeepResearchDrawer from "@/app/components/research/DeepResearchDrawer";
-import { citationLabel } from "@/lib/sources";
-import "@/app/components/research/deep-research.css";
+import AudioOverviewPanel from "@/app/components/audio/AudioOverviewPanel";
 import ResearchCanvas from "@/app/dashboard/ResearchCanvas";
 import { OnboardingTour } from "@/app/dashboard/OnboardingTour";
+import { citationLabel } from "@/lib/sources";
+import "@/app/dashboard/research-canvas.css";
+import "@/app/components/research/deep-research.css";
 
-const LockIcon = () => (
-  <svg className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-  </svg>
-);
+type Workspace = {
+  id: string;
+  name: string;
+  created_at?: string;
+};
+
+type DocumentSource = {
+  id: string;
+  workspace_id?: string;
+  filename: string;
+  file_type: string;
+  source_url?: string | null;
+  status: "pending" | "processing" | "ready" | "failed";
+  error_message?: string | null;
+  created_at: string;
+};
+
+type ChatSession = {
+  id: string;
+  workspace_id: string;
+  title: string;
+  created_at: string;
+};
+
+type Message = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  citations?: any[];
+};
+
+type StudioOutput = {
+  id: string;
+  workspace_id: string;
+  synthesis_node_id: string | null;
+  output_type: "mind_map" | "study_guide" | "quiz" | "flashcards";
+  title: string;
+  status: "pending" | "processing" | "ready" | "failed";
+  content: any | null;
+  error: string | null;
+  error_message?: string | null;
+  citations: any[];
+  created_at: string;
+};
+
+type DashboardView = "ask" | "notes" | "studio" | "canvas" | "agent";
+
+const STUDIO_CARDS = [
+  { id: "study_guide", label: "Study Guide", icon: BookOpen, accent: "text-emerald-300 bg-emerald-500/10 border-emerald-500/20" },
+  { id: "mind_map", label: "Mind Map", icon: Network, accent: "text-sky-300 bg-sky-500/10 border-sky-500/20" },
+  { id: "quiz", label: "Quiz", icon: CheckCircle2, accent: "text-amber-300 bg-amber-500/10 border-amber-500/20" },
+  { id: "flashcards", label: "Flashcards", icon: Layers3, accent: "text-violet-300 bg-violet-500/10 border-violet-500/20" },
+] as const;
+
+const SUGGESTED_PROMPTS = [
+  "What are the strongest claims across these sources?",
+  "Where do the sources disagree?",
+  "Summarize this notebook with citations.",
+  "Turn this material into an action plan.",
+];
+
+function normalizeStatus(status?: string): DocumentSource["status"] {
+  if (status === "pending" || status === "processing" || status === "failed") return status;
+  return "ready";
+}
+
+function sourceIcon(type: string) {
+  const kind = type.toLowerCase();
+  if (kind.includes("youtube")) return Video;
+  if (kind.includes("url") || kind.includes("web")) return Globe;
+  return FileText;
+}
+
+function sourceTone(type: string) {
+  const kind = type.toLowerCase();
+  if (kind.includes("pdf")) return "text-rose-300 bg-rose-500/10 border-rose-500/20";
+  if (kind.includes("youtube")) return "text-red-300 bg-red-500/10 border-red-500/20";
+  if (kind.includes("csv") || kind.includes("xlsx")) return "text-emerald-300 bg-emerald-500/10 border-emerald-500/20";
+  if (kind.includes("url") || kind.includes("web")) return "text-sky-300 bg-sky-500/10 border-sky-500/20";
+  return "text-violet-300 bg-violet-500/10 border-violet-500/20";
+}
+
+function outputLabel(type: string) {
+  return type.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function formatDate(value?: string) {
+  if (!value) return "";
+  return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 function extractYoutubeTimestamp(content: string): string {
   if (!content) return "";
@@ -32,1679 +140,1107 @@ function extractYoutubeTimestamp(content: string): string {
 function parseTimeToSeconds(timeStr: string): number {
   if (!timeStr) return 0;
   const parts = timeStr.split(":").map(Number);
-  if (parts.length === 3) {
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  }
-  if (parts.length === 2) {
-    return parts[0] * 60 + parts[1];
-  }
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
   return parts[0] || 0;
-}
-
-interface Workspace {
-  id: string;
-  name: string;
-}
-
-interface DocumentSource {
-  id: string;
-  filename: string;
-  file_type: string;
-  created_at: string;
-  status: "processing" | "ready" | "failed";
-  error_message?: string | null;
-}
-
-type SourceTab = "files" | "website" | "youtube" | "audio" | "image" | "paste";
-
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  citations?: Array<{
-    filename: string;
-    page_number: number;
-    content: string;
-  }>;
 }
 
 export default function Dashboard() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
-  
   const [sources, setSources] = useState<DocumentSource[]>([]);
-  const [showAddSource, setShowAddSource] = useState(false);
-  const [drOpen, setDrOpen] = useState(false);
-  const [userTier, setUserTier] = useState<"Free" | "Pro" | "Team">("Free");
-  const hasReadySources = sources.some((src) => src.status === "ready" || !src.status || (src.status as string) === "grounded");
-  const [activeSourceTab, setActiveSourceTab] = useState<SourceTab>("files");
-  const [urlInput, setUrlInput] = useState("");
-  const [pasteTitle, setPasteTitle] = useState("");
-  const [pasteContent, setPasteContent] = useState("");
-  const [uploadProgress, setUploadProgress] = useState<{
-    fileName: string;
-    status: string;
-    progress: number;
-  } | null>(null);
-
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [streamingText, setStreamingText] = useState("");
-  
-  const [activeProvider, setActiveProvider] = useState("atlas-cloud");
-  const [activeScopeNode, setActiveScopeNode] = useState<{
-    id: string;
-    title: string;
-    count: number;
-  } | null>(null);
-  const [availableProviders, setAvailableProviders] = useState<{ id: string, name: string, status: string }[]>([]);
-  const atlasProviderLabel = availableProviders.find((p) => p.id === activeProvider)?.name || "AtlasLM Engine";
   const [citationsMap, setCitationsMap] = useState<Record<string, any>>({});
   const [selectedCitation, setSelectedCitation] = useState<any | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const [uiError, setUiError] = useState<string>("");
-  const [token, setToken] = useState<string>("");
-
-  // Studio State
-  interface StudioOutput {
-    id: string;
-    workspace_id: string;
-    synthesis_node_id: string | null;
-    output_type: string;
-    title: string;
-    content: any | null;
-    citations: any[] | null;
-    status: "pending" | "processing" | "ready" | "failed";
-    error_message: string | null;
-    error: string | null;
-    created_at: string;
-  }
   const [studioOutputs, setStudioOutputs] = useState<StudioOutput[]>([]);
-  const [studioTypes, setStudioTypes] = useState<{id: string; label: string}[]>([]);
-  const [synthesisNodes, setSynthesisNodes] = useState<any[]>([]);
   const [openOutput, setOpenOutput] = useState<StudioOutput | null>(null);
-  const [activeTab, setActiveTab] = useState<"canvas" | "chat" | "studio">("canvas");
+  const [view, setView] = useState<DashboardView>("ask");
+  const [token, setToken] = useState("");
+  const [userTier, setUserTier] = useState<"Free" | "Pro" | "Team">("Free");
+  const [engineStatus, setEngineStatus] = useState<"active" | "inactive" | "loading">("loading");
+  const [showAddSource, setShowAddSource] = useState(false);
+  const [deepResearchOpen, setDeepResearchOpen] = useState(false);
+  const [uiError, setUiError] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [notes, setNotes] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [activeScopeNode, setActiveScopeNode] = useState<{ id: string; title: string; count: number } | null>(null);
 
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  // accumulate streaming chunks outside React state to avoid stale closures
-  const streamingAccumRef = useRef<string>("");
+  const streamingAccumRef = useRef("");
   const citationsMapRef = useRef<Record<string, any>>({});
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // SVG Icons (no emojis, professional)
-  const WorkspaceIcon = () => (
-    <svg className="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-    </svg>
+  const readySources = useMemo(
+    () => sources.filter((source) => source.status === "ready"),
+    [sources],
   );
-
-  const UploadIcon = () => (
-    <svg className="w-8 h-8 text-zinc-600 group-hover:text-orange-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-    </svg>
+  const processingSources = useMemo(
+    () => sources.filter((source) => source.status === "pending" || source.status === "processing"),
+    [sources],
   );
-
-  const SendIcon = () => (
-    <svg className="w-4.5 h-4.5 text-zinc-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
-    </svg>
+  const failedSources = useMemo(
+    () => sources.filter((source) => source.status === "failed"),
+    [sources],
   );
+  const filteredSources = useMemo(() => {
+    const query = sourceFilter.trim().toLowerCase();
+    if (!query) return sources;
+    return sources.filter((source) =>
+      `${source.filename} ${source.file_type}`.toLowerCase().includes(query),
+    );
+  }, [sources, sourceFilter]);
 
-  const GlobeIcon = () => (
-    <svg className="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-    </svg>
-  );
-
-  const SettingsIcon = () => (
-    <svg className="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-    </svg>
-  );
-
-  const TrashIcon = () => (
-    <svg className="w-3.5 h-3.5 text-zinc-650 hover:text-red-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-4v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-    </svg>
-  );
-
-  const RefreshIcon = () => (
-    <svg className="w-3.5 h-3.5 text-zinc-400 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89M9 11l3-3m0 0l3 3m-3-3v8" />
-    </svg>
-  );
-
-  // Initialize workspaces and restore session from localStorage
-  useEffect(() => {
-    const restoreSession = async () => {
-      const data = await apiClient.get<Workspace[]>("/api/v1/workspaces");
-      setWorkspaces(data);
-      
-      // Restore selected workspace from localStorage
-      const savedWorkspaceId = typeof window !== 'undefined' ? localStorage.getItem("selectedWorkspaceId") : null;
-      let ws = data.find((w) => w.id === savedWorkspaceId) || data[0];
-      if (ws) {
-        setSelectedWorkspace(ws);
-      }
-    };
-    
-    const fetchProviders = async () => {
-      try {
-        const data = await apiClient.get<any>("/api/v1/settings/providers");
-        if (data && data.providers) {
-          setAvailableProviders(data.providers);
-          const cloud = data.providers.find((p: any) => p.id === "atlas-cloud");
-          const local = data.providers.find((p: any) => p.id === "atlas-local");
-          if (cloud && cloud.status === "active") {
-            setActiveProvider("atlas-cloud");
-          } else if (local) {
-            setActiveProvider("atlas-local");
-          }
-        }
-      } catch (e) {
-        console.error("Failed to load providers:", e);
-      }
-    };
-
-    const fetchStudioTypes = async () => {
-      try {
-        const res = await apiClient.get<{ types: { id: string; label: string }[] }>("/api/v1/studio/types");
-        setStudioTypes(res.types);
-      } catch (e) {
-        console.error("Failed to load studio types:", e);
-      }
-    };
-    
-    fetchWorkspaces();
-    restoreSession().catch(console.error);
-    fetchProviders().catch(console.error);
-    fetchStudioTypes().catch(console.error);
-  }, []);
-
-  useEffect(() => {
-    const fetchToken = async () => {
-      try {
-        const supabase = supabaseBrowser();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.access_token) {
-          setToken(session.access_token);
-        }
-      } catch (err) {
-        console.error("Failed to fetch token", err);
-      }
-    };
-    fetchToken();
-  }, []);
-
-  useEffect(() => {
-    const loadProfile = async () => {
-      try {
-        const profile = await getCurrentProfile();
-        if (profile) {
-          setUserTier(profile.tier);
-        }
-      } catch (err) {
-        console.error("Failed to load user profile tier:", err);
-      }
-    };
-    loadProfile();
-  }, []);
-
-  const fetchStudioOutputs = async (wsId: string) => {
-    try {
-      const data = await apiClient.get<StudioOutput[]>(`/api/v1/workspaces/${wsId}/studio`);
-      setStudioOutputs(data);
-      // Resume polling for any pending or processing jobs loaded from DB
-      data.forEach((out) => {
-        if (out.status === "pending" || out.status === "processing") {
-          pollStudioOutput(out.id);
-        }
-      });
-    } catch (e) {
-      console.error("Failed to load studio outputs:", e);
-    }
-  };
-
-  const fetchSynthesisNodes = async (wsId: string) => {
-    try {
-      const data = await apiClient.get<any[]>(`/api/v1/workspaces/${wsId}/synthesis`);
-      setSynthesisNodes(data);
-    } catch (e) {
-      console.error("Failed to load synthesis nodes:", e);
-    }
-  };
-
-  // When workspace changes, fetch documents & sessions + save to localStorage
-  useEffect(() => {
-    if (selectedWorkspace) {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem("selectedWorkspaceId", selectedWorkspace.id);
-      }
-      fetchDocuments(selectedWorkspace.id);
-      fetchSessions(selectedWorkspace.id);
-      fetchStudioOutputs(selectedWorkspace.id);
-      fetchSynthesisNodes(selectedWorkspace.id);
-      setSelectedSessionId(null);
-      setMessages([]);
-      setStreamingText("");
-      setCitationsMap({});
-      setSelectedCitation(null);
-      setOpenOutput(null);
-    }
-  }, [selectedWorkspace]);
-
-  // When session changes, fetch session details + save to localStorage
-  useEffect(() => {
-    if (selectedSessionId) {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem("selectedSessionId", selectedSessionId);
-      }
-      fetchSessionDetails(selectedSessionId);
-    }
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingText]);
-
-  // Poll workspace documents if any are processing
-  useEffect(() => {
-    if (!selectedWorkspace) return;
-    const hasProcessing = sources.some((src) => src.status === "processing");
-    if (!hasProcessing) return;
-
-    const interval = setInterval(() => {
-      fetchDocuments(selectedWorkspace.id);
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [sources, selectedWorkspace]);
-
-  // --- API CALLS (all authenticated via apiClient) ---
   const getErrorMessage = (err: unknown, fallback: string) => {
     if (err instanceof Error && err.message) return err.message;
     return fallback;
   };
 
-  const fetchWorkspaces = async () => {
+  const fetchWorkspaces = useCallback(async () => {
     try {
       const data = await apiClient.get<Workspace[]>("/api/v1/workspaces");
       setWorkspaces(data);
-      if (data.length > 0 && !selectedWorkspace) {
-        setSelectedWorkspace(data[0]);
-      }
-    } catch (e) {
-      console.error(e);
-      setUiError(getErrorMessage(e, "Failed to load notebooks. Please refresh and try again."));
-    }
-  };
-
-  const handleCreateWorkspace = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newWorkspaceName.trim()) return;
-    try {
-      const data = await apiClient.post<Workspace>("/api/v1/workspaces", { name: newWorkspaceName });
-      setWorkspaces((prev) => [data, ...prev]);
-      setSelectedWorkspace(data);
-      setNewWorkspaceName("");
-      setUiError("");
-    } catch (e) {
-      console.error(e);
-      setUiError(getErrorMessage(e, "Failed to create notebook. Please try a different name."));
-    }
-  };
-
-  const fetchDocuments = async (wsId: string) => {
-    try {
-      const data = await apiClient.get<any[]>(`/api/v1/workspaces/${wsId}/documents`);
-      setSources(
-        data.map((doc: any) => ({
-          ...doc,
-          status: doc.status || "ready",
-        }))
-      );
-    } catch (e) {
-      console.error(e);
-      setUiError(getErrorMessage(e, "Failed to load sources for this notebook."));
-    }
-  };
-
-  const fetchSessions = async (wsId: string) => {
-    try {
-      const data = await apiClient.get<any[]>(`/api/v1/workspaces/${wsId}/sessions`);
-      setSessions(data);
-      
-      // Try to restore selected session from localStorage
-      const savedSessionId = typeof window !== 'undefined' ? localStorage.getItem("selectedSessionId") : null;
-      const savedSession = savedSessionId ? data.find((s) => s.id === savedSessionId) : null;
-      
-      if (savedSession) {
-        setSelectedSessionId(savedSession.id);
-      } else if (data.length > 0) {
-        setSelectedSessionId(data[0].id);
-      } else {
-        // Create an initial session if none exist
-        handleCreateSession(wsId);
-      }
-    } catch (e) {
-      console.error(e);
-      setUiError(getErrorMessage(e, "Failed to load chat sessions for this notebook."));
-    }
-  };
-
-  const handleCreateSession = async (wsId: string) => {
-    try {
-      const data = await apiClient.post<any>(`/api/v1/workspaces/${wsId}/sessions`, { title: "Notebook Chat" });
-      setSessions((prev) => [data, ...prev]);
-      setSelectedSessionId(data.id);
-    } catch (e) {
-      console.error(e);
-      setUiError(getErrorMessage(e, "Failed to create chat session. Please retry."));
-    }
-  };
-
-  const fetchSessionDetails = async (sessionId: string) => {
-    try {
-      const data = await apiClient.get<any>(`/api/v1/sessions/${sessionId}`);
-      setMessages(data.messages || []);
-    } catch (e) {
-      console.error(e);
-      setUiError(getErrorMessage(e, "Failed to load selected chat session."));
-    }
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedWorkspace) return;
-
-    setUploadProgress({
-      fileName: file.name,
-      status: "Uploading document...",
-      progress: 25,
-    });
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      setUploadProgress((prev: any) => ({
-        ...prev,
-        status: "Parsing document structure...",
-        progress: 60,
-      }));
-      
-      const doc = await apiClient.postForm<any>(`/api/v1/workspaces/${selectedWorkspace.id}/documents`, formData);
-
-      
-      setUploadProgress((prev: any) => ({
-        ...prev,
-        status: "Generating vector embeddings...",
-        progress: 90,
-      }));
-
-      // Refresh documents
-      setSources((prev) => [
-        {
-          id: doc.id,
-          filename: doc.filename,
-          file_type: doc.file_type,
-          created_at: doc.created_at,
-          status: doc.status || "ready",
-          error_message: doc.error_message,
-        },
-        ...prev,
-      ]);
-      
-      setUploadProgress(null);
+      const savedWorkspaceId = typeof window !== "undefined" ? localStorage.getItem("selectedWorkspaceId") : null;
+      const restored = data.find((workspace) => workspace.id === savedWorkspaceId) || data[0] || null;
+      setSelectedWorkspace(restored);
       setUiError("");
     } catch (err) {
-      console.error(err);
-      setUploadProgress({
-        fileName: file.name,
-        status: "Failed to parse document.",
-        progress: 100,
-      });
-      setUiError(getErrorMessage(err, "File upload failed. Please verify format (PDF/DOCX/TXT/MD/CSV) and size."));
-      setTimeout(() => setUploadProgress(null), 3000);
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      setUiError(getErrorMessage(err, "Could not load notebooks."));
     }
-  };
+  }, []);
 
-  const handleURLIngest = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!urlInput.trim() || !selectedWorkspace) return;
-
-    setUploadProgress({
-      fileName: urlInput,
-      status: "Crawling URL...",
-      progress: 30,
-    });
-
+  const fetchDocuments = useCallback(async (workspaceId: string) => {
     try {
-      const doc = await apiClient.post<any>(
-        `/api/v1/workspaces/${selectedWorkspace.id}/documents/url`,
-        { url: urlInput }
+      const data = await apiClient.get<DocumentSource[]>(`/api/v1/workspaces/${workspaceId}/documents`);
+      setSources(
+        data.map((source) => ({
+          ...source,
+          status: normalizeStatus(source.status),
+        })),
       );
+    } catch (err) {
+      setUiError(getErrorMessage(err, "Could not load sources."));
+    }
+  }, []);
 
-      setSources((prev) => [
-        {
-          id: doc.id,
-          filename: doc.filename,
-          file_type: doc.file_type,
-          created_at: doc.created_at,
-          status: doc.status || "ready",
-          error_message: doc.error_message,
-        },
-        ...prev,
-      ]);
-      setUrlInput("");
-      setUploadProgress(null);
-      setUiError("");
-    } catch (e) {
-      console.error(e);
-      setUploadProgress({
-        fileName: urlInput,
-        status: "Failed to crawl web URL.",
-        progress: 100,
+  const fetchStudioOutputs = useCallback(async (workspaceId: string) => {
+    try {
+      const data = await apiClient.get<StudioOutput[]>(`/api/v1/workspaces/${workspaceId}/studio`);
+      setStudioOutputs(data);
+      data.forEach((output) => {
+        if (output.status === "pending" || output.status === "processing") {
+          pollStudioOutput(output.id, workspaceId);
+        }
       });
-      setUiError(getErrorMessage(e, "Website ingestion failed. Check URL and try again."));
+    } catch (err) {
+      console.error("Failed to load studio outputs", err);
+    }
+  }, []);
+
+  const handleCreateSession = useCallback(async (workspaceId: string) => {
+    const session = await apiClient.post<ChatSession>(`/api/v1/workspaces/${workspaceId}/sessions`, {
+      title: "Grounded Q&A",
+    });
+    setSessions((prev) => [session, ...prev]);
+    setSelectedSessionId(session.id);
+  }, []);
+
+  const fetchSessions = useCallback(async (workspaceId: string) => {
+    try {
+      const data = await apiClient.get<ChatSession[]>(`/api/v1/workspaces/${workspaceId}/sessions`);
+      setSessions(data);
+      if (data.length === 0) {
+        await handleCreateSession(workspaceId);
+        return;
+      }
+      const savedSessionId = typeof window !== "undefined" ? localStorage.getItem(`selectedSessionId:${workspaceId}`) : null;
+      setSelectedSessionId(data.find((session) => session.id === savedSessionId)?.id || data[0].id);
+    } catch (err) {
+      setUiError(getErrorMessage(err, "Could not load chat sessions."));
+    }
+  }, [handleCreateSession]);
+
+  const fetchSessionDetails = useCallback(async (sessionId: string) => {
+    try {
+      const data = await apiClient.get<{ messages?: Message[] } & ChatSession>(`/api/v1/sessions/${sessionId}`);
+      setMessages(data.messages || []);
+    } catch (err) {
+      setUiError(getErrorMessage(err, "Could not load chat history."));
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchWorkspaces().catch(console.error);
+
+    const loadSession = async () => {
+      const supabase = supabaseBrowser();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session?.access_token) setToken(session.access_token);
+    };
+
+    const loadProfile = async () => {
+      try {
+        const profile = await getCurrentProfile();
+        if (profile?.tier) setUserTier(profile.tier);
+      } catch (err) {
+        console.error("Profile load failed", err);
+      }
+    };
+
+    const loadEngine = async () => {
+      try {
+        const data = await apiClient.get<{ providers: { id: string; status: string }[] }>("/api/v1/settings/providers");
+        const cloud = data.providers.find((provider) => provider.id === "atlas-cloud");
+        setEngineStatus(cloud?.status === "active" ? "active" : "inactive");
+      } catch {
+        setEngineStatus("inactive");
+      }
+    };
+
+    loadSession().catch(console.error);
+    loadProfile().catch(console.error);
+    loadEngine().catch(console.error);
+  }, [fetchWorkspaces]);
+
+  useEffect(() => {
+    if (!selectedWorkspace) return;
+    localStorage.setItem("selectedWorkspaceId", selectedWorkspace.id);
+    setMessages([]);
+    setSelectedCitation(null);
+    setOpenOutput(null);
+    setActiveScopeNode(null);
+    setNotes(localStorage.getItem(`atlaslm-notes:${selectedWorkspace.id}`) || "");
+    fetchDocuments(selectedWorkspace.id);
+    fetchSessions(selectedWorkspace.id);
+    fetchStudioOutputs(selectedWorkspace.id);
+  }, [fetchDocuments, fetchSessions, fetchStudioOutputs, selectedWorkspace]);
+
+  useEffect(() => {
+    if (!selectedWorkspace || !selectedSessionId) return;
+    localStorage.setItem(`selectedSessionId:${selectedWorkspace.id}`, selectedSessionId);
+    fetchSessionDetails(selectedSessionId);
+  }, [fetchSessionDetails, selectedSessionId, selectedWorkspace]);
+
+  useEffect(() => {
+    if (!selectedWorkspace) return;
+    localStorage.setItem(`atlaslm-notes:${selectedWorkspace.id}`, notes);
+  }, [notes, selectedWorkspace]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, streamingText, view]);
+
+  useEffect(() => {
+    if (!selectedWorkspace || processingSources.length === 0) return;
+    const interval = setInterval(() => fetchDocuments(selectedWorkspace.id), 3000);
+    return () => clearInterval(interval);
+  }, [fetchDocuments, processingSources.length, selectedWorkspace]);
+
+  const handleCreateWorkspace = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = newWorkspaceName.trim();
+    if (!name) return;
+    try {
+      const workspace = await apiClient.post<Workspace>("/api/v1/workspaces", { name });
+      setWorkspaces((prev) => [workspace, ...prev]);
+      setSelectedWorkspace(workspace);
+      setNewWorkspaceName("");
+      setUiError("");
+    } catch (err) {
+      setUiError(getErrorMessage(err, "Could not create notebook."));
     }
   };
 
-  const generateStudioOutput = async (outputType: string) => {
-    if (!selectedWorkspace) return;
+  const handleDeleteDocument = async (documentId: string) => {
     try {
-      const res = await apiClient.postRaw(`/api/v1/workspaces/${selectedWorkspace.id}/studio`, {
+      await apiClient.del(`/api/v1/documents/${documentId}`);
+      setSources((prev) => prev.filter((source) => source.id !== documentId));
+    } catch (err) {
+      setUiError(getErrorMessage(err, "Could not delete source."));
+    }
+  };
+
+  const handleSaveNotesAsSource = async () => {
+    if (!selectedWorkspace || !notes.trim()) return;
+    setNotesSaving(true);
+    try {
+      await apiClient.post(`/api/v1/workspaces/${selectedWorkspace.id}/documents/text`, {
+        title: `Notebook notes - ${new Date().toLocaleDateString()}`,
+        content: notes.trim(),
+      });
+      await fetchDocuments(selectedWorkspace.id);
+      setUiError("");
+    } catch (err) {
+      setUiError(getErrorMessage(err, "Could not add notes as a source."));
+    } finally {
+      setNotesSaving(false);
+    }
+  };
+
+  const handleSendChatMessage = async (event?: React.FormEvent, promptOverride?: string) => {
+    event?.preventDefault();
+    const query = (promptOverride || chatInput).trim();
+    if (!query || !selectedSessionId || chatLoading) return;
+
+    setChatInput("");
+    setChatLoading(true);
+    setStreamingText("");
+    streamingAccumRef.current = "";
+    citationsMapRef.current = {};
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: query,
+      },
+    ]);
+
+    try {
+      const response = await apiClient.stream(`/api/v1/sessions/${selectedSessionId}/chat/stream`, {
+        content: query,
+        synthesis_node_id: activeScopeNode?.id || null,
+      });
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response stream.");
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const cleanLine = line.trim();
+          if (!cleanLine.startsWith("data: ")) continue;
+          const dataStr = cleanLine.slice(6).trim();
+          if (dataStr === "[DONE]") break;
+          try {
+            const payload = JSON.parse(dataStr);
+            if (payload.type === "metadata") {
+              citationsMapRef.current = payload.sources || {};
+              setCitationsMap(payload.sources || {});
+            } else if (payload.type === "chunk") {
+              streamingAccumRef.current += payload.content;
+              setStreamingText(streamingAccumRef.current);
+            } else if (payload.error) {
+              throw new Error(payload.error);
+            }
+          } catch (err) {
+            console.error("Stream parse failed", err);
+          }
+        }
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: streamingAccumRef.current,
+          citations: Object.values(citationsMapRef.current),
+        },
+      ]);
+      setStreamingText("");
+      setUiError("");
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "AtlasLM could not complete that request. Check the source set and try again.",
+        },
+      ]);
+      setUiError(getErrorMessage(err, "Chat request failed."));
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const pollStudioOutput = (outputId: string, workspaceId?: string) => {
+    const id = workspaceId || selectedWorkspace?.id;
+    if (!id) return;
+    const interval = setInterval(async () => {
+      try {
+        const output = await apiClient.get<StudioOutput>(`/api/v1/workspaces/${id}/studio/${outputId}`);
+        setStudioOutputs((prev) => prev.map((item) => (item.id === output.id ? output : item)));
+        setOpenOutput((current) => (current?.id === output.id ? output : current));
+        if (output.status === "ready" || output.status === "failed") clearInterval(interval);
+      } catch (err) {
+        console.error("Studio polling failed", err);
+        clearInterval(interval);
+      }
+    }, 1600);
+  };
+
+  const generateStudioOutput = async (outputType: StudioOutput["output_type"]) => {
+    if (!selectedWorkspace) return;
+    if (readySources.length === 0) {
+      setUiError("Add at least one ready source first.");
+      return;
+    }
+
+    try {
+      const response = await apiClient.postRaw(`/api/v1/workspaces/${selectedWorkspace.id}/studio`, {
         output_type: outputType,
         synthesis_node_id: activeScopeNode?.id || null,
       });
-      const body = await res.json();
-      if (res.status === 202 || res.status === 201 || res.status === 250 || res.status === 200) {
-        setStudioOutputs((prev) => [body, ...prev]);
-        pollStudioOutput(body.id, selectedWorkspace.id);
-        setActiveTab("studio");
-        setUiError("");
-      } else {
-        setUiError(body.detail || "Failed to generate Studio output.");
+      const body = await response.json();
+      if (!response.ok) {
+        setUiError(body.detail || "Could not generate this output.");
+        return;
       }
-    } catch (e) {
-      console.error(e);
-      setUiError(getErrorMessage(e, "Failed to generate Studio output. Please check sources."));
+      setStudioOutputs((prev) => [body, ...prev]);
+      setOpenOutput(body);
+      setView("studio");
+      pollStudioOutput(body.id, selectedWorkspace.id);
+      setUiError("");
+    } catch (err) {
+      setUiError(getErrorMessage(err, "Could not generate this output."));
     }
-  };
-
-  const pollStudioOutput = (outputId: string, wsId?: string) => {
-    const workspaceId = wsId || selectedWorkspace?.id;
-    if (!workspaceId) return;
-    const interval = setInterval(async () => {
-      try {
-        const out = await apiClient.get<StudioOutput>(`/api/v1/workspaces/${workspaceId}/studio/${outputId}`);
-        setStudioOutputs((prev) => prev.map((o) => (o.id === out.id ? out : o)));
-        
-        // Also update open output details if open
-        setOpenOutput((currentOpen) => {
-          if (currentOpen && currentOpen.id === out.id) {
-            return out;
-          }
-          return currentOpen;
-        });
-
-        if (out.status === "ready" || out.status === "failed") {
-          clearInterval(interval);
-        }
-      } catch (err) {
-        console.error("Polling error for Studio output:", err);
-        clearInterval(interval);
-      }
-    }, 1500);
   };
 
   const handleDeleteStudioOutput = async (outputId: string) => {
     if (!selectedWorkspace) return;
     try {
       await apiClient.del(`/api/v1/workspaces/${selectedWorkspace.id}/studio/${outputId}`);
-      setStudioOutputs((prev) => prev.filter((o) => o.id !== outputId));
-      setOpenOutput((curr) => (curr && curr.id === outputId ? null : curr));
-    } catch (e) {
-      console.error(e);
-      setUiError(getErrorMessage(e, "Failed to delete Studio output."));
-    }
-  };
-
-
-
-  const handleTextIngest = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pasteContent.trim() || !selectedWorkspace) return;
-
-    const title = pasteTitle.trim() || "Untitled research note";
-    const content = pasteContent.trim();
-
-    setUploadProgress({
-      fileName: title,
-      status: "Preparing pasted text...",
-      progress: 35,
-    });
-
-    try {
-      const doc = await apiClient.post<any>(
-        `/api/v1/workspaces/${selectedWorkspace.id}/documents/text`,
-        { title, content }
-      );
-
-      setUploadProgress((prev: any) => ({
-        ...prev,
-        status: "Generating vector embeddings...",
-        progress: 90,
-      }));
-
-      setSources((prev) => [
-        {
-          id: doc.id,
-          filename: doc.filename,
-          file_type: doc.file_type,
-          created_at: doc.created_at,
-          status: doc.status || "ready",
-        },
-        ...prev,
-      ]);
-      setPasteTitle("");
-      setPasteContent("");
-      setUploadProgress(null);
-      setUiError("");
-    } catch (e) {
-      console.error(e);
-      setUploadProgress({
-        fileName: title,
-        status: "Failed to ingest pasted text.",
-        progress: 100,
-      });
-      setUiError(getErrorMessage(e, "Paste text ingestion failed. Please retry."));
-      setTimeout(() => setUploadProgress(null), 3000);
-    }
-  };
-
-  const handleDeleteDocument = async (docId: string) => {
-    try {
-      await apiClient.del(`/api/v1/documents/${docId}`);
-      setSources((prev) => prev.filter((d) => d.id !== docId));
-    } catch (e) {
-      console.error(e);
-      setUiError(getErrorMessage(e, "Failed to delete source."));
-    }
-  };
-
-  // --- RAG CHAT SSE STREAMING ---
-
-  const handleSendChatMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatInput.trim() || !selectedSessionId || chatLoading) return;
-
-    const userQuery = chatInput;
-    const sessionId = selectedSessionId; // capture outside closure
-    setChatInput("");
-    setChatLoading(true);
-    setStreamingText("");
-    // Reset ref-based accumulators  -  avoids stale closure captures of state
-    streamingAccumRef.current = "";
-    citationsMapRef.current = {};
-    
-    // Optimistic user bubble
-    const userMsg: Message = {
-      id: Math.random().toString(),
-      role: "user",
-      content: userQuery,
-    };
-    setMessages((prev) => [...prev, userMsg]);
-
-    try {
-      const response = await apiClient.stream(
-        `/api/v1/sessions/${sessionId}/chat/stream`,
-        {
-          content: userQuery,
-          synthesis_node_id: activeScopeNode?.id || null,
-        }
-      );
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      if (!reader) return;
-
-      let buffer = "";
-      
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        
-        // Split by SSE lines
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || ""; // Keep incomplete tail for next iteration
-
-        for (const line of lines) {
-          const cleanLine = line.trim();
-          if (!cleanLine) continue;
-
-          if (cleanLine.startsWith("data: ")) {
-            const dataStr = cleanLine.substring(6).trim();
-            if (dataStr === "[DONE]") break;
-            try {
-              const payload = JSON.parse(dataStr);
-              if (payload.type === "metadata") {
-                // Store citation map in ref (not state) to avoid stale closure
-                citationsMapRef.current = payload.sources || {};
-                setCitationsMap(payload.sources || {});
-              } else if (payload.type === "chunk") {
-                // Accumulate in ref AND update state for live render
-                streamingAccumRef.current += payload.content;
-                setStreamingText(streamingAccumRef.current);
-              } else if (payload.error) {
-                throw new Error(payload.error);
-              }
-            } catch {
-              // Non-JSON line, skip
-            }
-          }
-        }
-      }
-
-      // Use ref values to avoid stale closure  -  always correct final text
-      const finalContent = streamingAccumRef.current;
-      const finalCitations = citationsMapRef.current;
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Math.random().toString(),
-          role: "assistant",
-          content: finalContent,
-          citations: Object.values(finalCitations),
-        },
-      ]);
-      setStreamingText("");
-      setChatLoading(false);
-      setUiError("");
+      setStudioOutputs((prev) => prev.filter((output) => output.id !== outputId));
+      setOpenOutput((current) => (current?.id === outputId ? null : current));
     } catch (err) {
-      console.error(err);
-      setChatLoading(false);
-      setUiError(getErrorMessage(err, "Chat failed. Please confirm you have an ingested source and try again."));
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Math.random().toString(),
-          role: "assistant",
-          content: "Failed to connect to the intelligence pipeline.",
-        },
-      ]);
+      setUiError(getErrorMessage(err, "Could not delete Studio output."));
     }
   };
 
-  // --- Citation Parser Helper ---
-  // Replaces tokens like [source_1] with a glowing clickable visual badge component
-  const renderMessageContentWithCitations = (content: string, msgCitations?: any[]) => {
+  const renderMessageContent = (content: string, msgCitations?: any[]) => {
     const parts = content.split(/(\[source_\d+\])/g);
-
     return parts.map((part, idx) => {
       const match = part.match(/\[source_(\d+)\]/);
-      if (match) {
-        const tag = `source_${match[1]}`;
-        // Resolve from message's own saved citations, or fallback to active session citationsMap
-        const sourceDetails = 
-          (msgCitations && msgCitations.find((c: any) => c.tag === tag)) || 
-          citationsMap[tag] || 
-          null;
-        
-        const isYoutube = sourceDetails?.file_type === "youtube" || (sourceDetails?.filename && sourceDetails.filename.endsWith(" (YouTube)"));
-        let chipText = match[1];
-        if (isYoutube && sourceDetails) {
-          const ts = extractYoutubeTimestamp(sourceDetails.content || sourceDetails.text || "");
-          if (ts) {
-            chipText = `@ ${ts}`;
-          }
-        }
-
-        return (
-          <button
-            key={idx}
-            onClick={() => sourceDetails && setSelectedCitation(sourceDetails)}
-            className="inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-950/40 text-orange-400 border border-orange-500/30 hover:bg-orange-500/20 transition-all duration-200 cursor-pointer ml-1 select-none"
-          >
-            {chipText}
-          </button>
-        );
+      if (!match) return <span key={idx}>{part}</span>;
+      const tag = `source_${match[1]}`;
+      const sourceDetails =
+        (msgCitations && msgCitations.find((citation: any) => citation.tag === tag)) ||
+        citationsMap[tag] ||
+        null;
+      const isYoutube =
+        sourceDetails?.file_type === "youtube" ||
+        (sourceDetails?.filename && sourceDetails.filename.endsWith(" (YouTube)"));
+      let chipText = match[1];
+      if (isYoutube && sourceDetails) {
+        const ts = extractYoutubeTimestamp(sourceDetails.content || sourceDetails.text || "");
+        if (ts) chipText = `@ ${ts}`;
       }
-      return <span key={idx}>{part}</span>;
+
+      return (
+        <button
+          key={idx}
+          type="button"
+          onClick={() => sourceDetails && setSelectedCitation(sourceDetails)}
+          className="mx-1 inline-flex h-5 items-center rounded border border-emerald-400/25 bg-emerald-400/10 px-1.5 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-400/20"
+        >
+          {chipText}
+        </button>
+      );
     });
   };
 
-  const renderCitationsFooter = (citations: any[]) => {
-    if (!citations || citations.length === 0) return null;
-    return (
-      <div className="mt-8 pt-4 border-t border-zinc-900/60">
-        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 block mb-2.5">
-          Sources Cited
-        </span>
-        <div className="flex flex-wrap gap-2">
-          {citations.map((cite: any, idx: number) => {
-            const doc = sources.find((s) => s.id === cite.document_id);
-            const filename = doc ? doc.filename : "Untitled Document";
-            const tag = `source_${idx + 1}`;
-            const details = {
-              tag,
-              document_id: cite.document_id,
-              filename,
-              page_number: cite.page_number,
-              content: `This source contributed context to the generation of this Studio output.`,
-            };
-            return (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setSelectedCitation(details)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-medium bg-zinc-900 text-zinc-300 border border-zinc-850 hover:bg-zinc-800 transition cursor-pointer"
-              >
-                <span>{filename}</span>
-                {cite.page_number != null && (
-                  <span className="text-[9px] text-zinc-500">(Page {cite.page_number})</span>
-                )}
-              </button>
-            );
-          })}
+  const renderOutputPreview = (output: StudioOutput | null) => {
+    if (!output) {
+      return (
+        <div className="flex h-full min-h-[280px] items-center justify-center rounded border border-dashed border-zinc-800 bg-zinc-950/40 text-sm text-zinc-500">
+          Select or generate an output.
         </div>
-      </div>
-    );
-  };
+      );
+    }
+    if (output.status === "pending" || output.status === "processing") {
+      return (
+        <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 rounded border border-zinc-800 bg-zinc-950/60">
+          <Loader2 className="h-6 w-6 animate-spin text-emerald-300" />
+          <span className="text-sm text-zinc-300">Generating {outputLabel(output.output_type)}</span>
+        </div>
+      );
+    }
+    if (output.status === "failed") {
+      return (
+        <div className="rounded border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
+          {output.error || output.error_message || "Generation failed."}
+        </div>
+      );
+    }
 
-  const renderMindMap = (content: any) => {
-    const root = content.root || "Central Topic";
-    const branches = content.branches || [];
-    const colors = [
-      "border-emerald-500/20 bg-emerald-950/5 text-emerald-400",
-      "border-rose-500/20 bg-rose-950/5 text-rose-400",
-      "border-amber-500/20 bg-amber-950/5 text-amber-400",
-      "border-sky-500/20 bg-sky-950/5 text-sky-400",
-      "border-violet-500/20 bg-violet-950/5 text-violet-400"
-    ];
-    return (
-      <div className="flex flex-col items-center py-4">
-        <div className="px-5 py-2.5 rounded-full font-bold text-white text-xs mb-5 bg-orange-600 border border-orange-500/25">
-          {root}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 w-full">
-          {branches.map((b: any, idx: number) => {
-            const colorClass = colors[idx % colors.length];
-            return (
-              <div key={idx} className={`rounded-xl border p-4 flex flex-col gap-1.5 ${colorClass}`}>
-                <h4 className="text-[11px] font-extrabold uppercase tracking-wider">{b.label}</h4>
-                <ul className="space-y-1.5 mt-1">
-                  {(b.children || []).map((child: string, cIdx: number) => (
-                    <li key={cIdx} className="text-zinc-350 text-[11px] flex items-start gap-2 leading-relaxed">
-                      <span className="h-1.5 w-1.5 rounded-full bg-orange-500 mt-1.5 flex-shrink-0" />
+    const content = output.content || {};
+    if (output.output_type === "mind_map") {
+      const branches = content.branches || [];
+      return (
+        <div className="space-y-4">
+          <div className="rounded border border-sky-400/20 bg-sky-400/10 p-4">
+            <div className="text-xs uppercase tracking-wide text-sky-200">Root</div>
+            <div className="mt-1 text-lg font-semibold text-white">{content.root || output.title}</div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {branches.map((branch: any, index: number) => (
+              <div key={index} className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
+                <div className="font-semibold text-zinc-100">{branch.label}</div>
+                <ul className="mt-3 space-y-2 text-sm text-zinc-400">
+                  {(branch.children || []).map((child: string, childIndex: number) => (
+                    <li key={childIndex} className="flex gap-2">
+                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-300" />
                       <span>{child}</span>
                     </li>
                   ))}
                 </ul>
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
-      </div>
-    );
-  };
+      );
+    }
 
-  const StudyGuideRenderer = ({ content }: { content: any }) => {
-    const [openSectionIdx, setOpenSectionIdx] = useState<number | null>(0);
-    const sections = content.sections || [];
-    return (
-      <div className="flex flex-col gap-2.5 w-full">
-        {sections.map((section: any, idx: number) => {
-          const isOpen = openSectionIdx === idx;
-          return (
-            <div key={idx} className="rounded-xl border border-zinc-900 bg-zinc-950/20 overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setOpenSectionIdx(isOpen ? null : idx)}
-                className="w-full text-left px-4 py-3.5 flex items-center justify-between text-white font-bold text-xs hover:bg-zinc-900/30 transition-colors"
-              >
-                <span>{section.heading}</span>
-                <span className="text-zinc-550 text-[10px]">{isOpen ? "▲" : "▼"}</span>
-              </button>
-              {isOpen && (
-                <div className="px-4 pb-4 pt-1.5 flex flex-col gap-3.5 border-t border-zinc-900/40">
-                  <p className="text-zinc-400 text-xs leading-relaxed italic">{section.summary}</p>
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-500">Key Points</span>
-                    <ul className="space-y-1.5">
-                      {(section.key_points || []).map((point: string, pIdx: number) => (
-                        <li key={pIdx} className="text-zinc-350 text-xs flex items-start gap-2 leading-relaxed">
-                          <span className="h-1.5 w-1.5 rounded-full bg-orange-500 mt-1.5 flex-shrink-0" />
-                          <span>{point}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              )}
+    if (output.output_type === "study_guide") {
+      return (
+        <div className="space-y-3">
+          {(content.sections || []).map((section: any, index: number) => (
+            <div key={index} className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
+              <h3 className="font-semibold text-white">{section.heading}</h3>
+              <p className="mt-2 text-sm leading-6 text-zinc-400">{section.summary}</p>
+              <ul className="mt-3 space-y-2 text-sm text-zinc-300">
+                {(section.key_points || []).slice(0, 5).map((point: string, pointIndex: number) => (
+                  <li key={pointIndex} className="flex gap-2">
+                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300" />
+                    <span>{point}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  const QuizRenderer = ({ content }: { content: any }) => {
-    const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
-    const questions = content.questions || [];
-    return (
-      <div className="flex flex-col gap-5 w-full">
-        {questions.map((q: any, qIdx: number) => {
-          const chosenIdx = selectedAnswers[qIdx];
-          const hasSelected = chosenIdx !== undefined;
-          const correctIdx = q.answer_index;
-          return (
-            <div key={qIdx} className="p-4 rounded-xl border border-zinc-900 bg-zinc-950/25 flex flex-col gap-3.5">
-              <h4 className="text-white text-xs font-bold leading-relaxed">{qIdx + 1}. {q.question}</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {(q.choices || []).map((choice: string, cIdx: number) => {
-                  const isCorrect = cIdx === correctIdx;
-                  const isSelected = cIdx === chosenIdx;
-                  let btnStyle = "border-zinc-850 hover:bg-zinc-900/30 text-zinc-300";
-                  if (hasSelected) {
-                    if (isCorrect) {
-                      btnStyle = "border-green-500/25 bg-green-950/15 text-green-400 font-medium";
-                    } else if (isSelected) {
-                      btnStyle = "border-red-500/25 bg-red-950/15 text-red-400 font-medium";
-                    } else {
-                      btnStyle = "border-zinc-900 bg-zinc-950/15 text-zinc-600 opacity-60";
-                    }
-                  }
-                  return (
-                    <button
-                      key={cIdx}
-                      type="button"
-                      disabled={hasSelected}
-                      onClick={() => setSelectedAnswers(prev => ({ ...prev, [qIdx]: cIdx }))}
-                      className={`text-left p-2.5 rounded-lg border text-xs transition flex items-center justify-between ${btnStyle}`}
-                    >
-                      <span>{choice}</span>
-                      {hasSelected && isCorrect && <span className="text-green-400">✓</span>}
-                      {hasSelected && isSelected && !isCorrect && <span className="text-red-400">✕</span>}
-                    </button>
-                  );
-                })}
-              </div>
-              {hasSelected && (
-                <div className="text-[11px] leading-relaxed text-zinc-400 bg-zinc-900/30 border border-zinc-850/40 p-3 rounded-lg">
-                  <span className="font-bold text-white block mb-0.5">Explanation:</span>
-                  {q.explanation}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  const FlashcardsRenderer = ({ content }: { content: any }) => {
-    const [cardIdx, setCardIdx] = useState(0);
-    const [isFlipped, setIsFlipped] = useState(false);
-    const cards = content.cards || [];
-    if (cards.length === 0) return <div className="text-zinc-500 text-xs">No cards.</div>;
-    const currentCard = cards[cardIdx];
-
-    const nextCard = () => {
-      setIsFlipped(false);
-      setCardIdx((prev) => (prev + 1) % cards.length);
-    };
-
-    const prevCard = () => {
-      setIsFlipped(false);
-      setCardIdx((prev) => (prev - 1 + cards.length) % cards.length);
-    };
-
-    return (
-      <div className="flex flex-col items-center gap-3 w-full max-w-md mx-auto py-2">
-        <div
-          onClick={() => setIsFlipped(!isFlipped)}
-          className="w-full h-48 rounded-2xl border border-zinc-900 bg-zinc-950/30 cursor-pointer select-none flex flex-col items-center justify-center p-6 text-center transition-all duration-300 hover:scale-[1.005]"
-        >
-          {!isFlipped ? (
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[9px] uppercase font-bold tracking-wider text-orange-500 mb-1">Prompt</span>
-              <p className="text-white text-xs font-semibold leading-relaxed">{currentCard.front}</p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[9px] uppercase font-bold tracking-wider text-green-400 mb-1">Answer</span>
-              <p className="text-zinc-200 text-xs leading-relaxed">{currentCard.back}</p>
-            </div>
-          )}
+          ))}
         </div>
-        <span className="text-[9px] text-zinc-500">Click card to flip</span>
-        
-        <div className="flex items-center justify-between w-full mt-1.5">
-          <button
-            type="button"
-            onClick={prevCard}
-            className="px-3.5 py-1.5 rounded-lg border border-zinc-850 hover:bg-zinc-900/30 text-xs text-zinc-300 transition duration-200"
-          >
-            ← Previous
-          </button>
-          <span className="text-xs text-zinc-400">{cardIdx + 1} / {cards.length}</span>
-          <button
-            type="button"
-            onClick={nextCard}
-            className="px-3.5 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-xs text-white font-bold transition duration-200"
-          >
-            Next →
-          </button>
-        </div>
-      </div>
-    );
-  };
+      );
+    }
 
-  return (
-    <div className="h-screen w-screen bg-zinc-950 flex overflow-hidden text-zinc-150 relative">
-      
-      {/* Settings Modal Slideover */}
-      <AnimatePresence>
-        {showSettings && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"
-            onClick={() => setShowSettings(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95 }}
-              animate={{ scale: 1 }}
-              exit={{ scale: 0.95 }}
-              className="w-full max-w-md rounded-2xl glass-panel p-8 bg-zinc-950/95"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-bold text-white mb-6">Pipeline Settings</h3>
-              <div className="flex flex-col gap-4">
-                <div className="flex flex-col gap-2">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                    AtlasLM Intelligence Mode
-                  </label>
-                  <select
-                    value={activeProvider}
-                    onChange={(e) => setActiveProvider(e.target.value)}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 transition-colors"
-                  >
-                    {availableProviders.map((prov) => (
-                      <option key={prov.id} value={prov.id} disabled={prov.status === "inactive"}>
-                        {prov.name} {prov.status === "inactive" ? "(Inactive)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex flex-col gap-2 mt-2">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                    Workspace Connections
-                  </label>
-                  <Link
-                    href="/settings/connections"
-                    className="w-full bg-zinc-900 border border-zinc-850 hover:bg-zinc-800 rounded-lg p-3 text-sm text-zinc-200 flex items-center justify-between hover:border-zinc-700 transition-all group"
-                  >
-                    <span>Manage Integrations</span>
-                    <svg
-                      className="w-4 h-4 text-zinc-500 group-hover:text-zinc-350 transition-colors"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                    </svg>
-                  </Link>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowSettings(false)}
-                className="w-full bg-zinc-900 border border-zinc-850 hover:bg-zinc-800 text-white font-bold py-3 rounded-lg text-xs tracking-wider uppercase mt-8 transition-colors"
-              >
-                Save configurations
-              </button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* COLUMN 1: LEFT SIDEBAR (Workspaces Selector) */}
-      <aside className="w-64 bg-zinc-950 border-r border-zinc-900/60 flex flex-col justify-between p-4 flex-shrink-0">
-        <div className="flex flex-col gap-6">
-          <Link href="/">
-            <Logo size={44} />
-          </Link>
-          
-          {/* Create Workspace */}
-          <form onSubmit={handleCreateWorkspace} className="flex flex-col gap-2">
-            <input
-              type="text"
-              placeholder="New Notebook..."
-              required
-              value={newWorkspaceName}
-              onChange={(e) => setNewWorkspaceName(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-850 rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-700 transition-colors"
-            />
-            <button
-              type="submit"
-              className="w-full bg-zinc-900 hover:bg-zinc-800 text-white border border-zinc-800 rounded-lg py-2 text-xs font-bold transition-all duration-200"
-            >
-              Create Notebook
-            </button>
-          </form>
-
-          {/* Notebook List */}
-          <div className="flex flex-col gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 px-2">Workspaces</span>
-            <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto">
-              {workspaces.map((ws) => {
-                const isSelected = selectedWorkspace?.id === ws.id;
-                return (
-                  <button
-                    key={ws.id}
-                    onClick={() => setSelectedWorkspace(ws)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs text-left transition-colors cursor-pointer ${
-                      isSelected
-                        ? "bg-zinc-900 text-white font-semibold border border-zinc-800"
-                        : "text-zinc-400 hover:bg-zinc-900/40 hover:text-zinc-200"
+    if (output.output_type === "quiz") {
+      return (
+        <div className="space-y-3">
+          {(content.questions || []).map((question: any, index: number) => (
+            <div key={index} className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
+              <div className="font-semibold text-white">{index + 1}. {question.question}</div>
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                {(question.choices || []).map((choice: string, choiceIndex: number) => (
+                  <div
+                    key={choiceIndex}
+                    className={`rounded border px-3 py-2 text-sm ${
+                      choiceIndex === question.answer_index
+                        ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
+                        : "border-zinc-800 bg-zinc-900/40 text-zinc-400"
                     }`}
                   >
-                    <WorkspaceIcon />
-                    <span className="truncate">{ws.name}</span>
+                    {choice}
+                  </div>
+                ))}
+              </div>
+              {question.explanation && <p className="mt-3 text-sm text-zinc-500">{question.explanation}</p>}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    if (output.output_type === "flashcards") {
+      return (
+        <div className="grid gap-3 md:grid-cols-2">
+          {(content.cards || []).map((card: any, index: number) => (
+            <div key={index} className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
+              <div className="text-xs uppercase tracking-wide text-violet-200">Prompt</div>
+              <div className="mt-1 font-semibold text-white">{card.front}</div>
+              <div className="mt-4 text-xs uppercase tracking-wide text-emerald-200">Answer</div>
+              <p className="mt-1 text-sm leading-6 text-zinc-400">{card.back}</p>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return <pre className="overflow-auto rounded border border-zinc-800 bg-zinc-950 p-4 text-xs text-zinc-300">{JSON.stringify(content, null, 2)}</pre>;
+  };
+
+  const viewButton = (id: DashboardView, label: string, Icon: typeof MessageSquare) => (
+    <button
+      type="button"
+      onClick={() => setView(id)}
+      className={`flex h-9 items-center gap-2 rounded px-3 text-sm font-medium transition ${
+        view === id
+          ? "bg-zinc-100 text-zinc-950"
+          : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="flex h-screen min-h-[720px] flex-col overflow-hidden bg-[#08090b] text-zinc-100">
+      <header className="flex h-16 shrink-0 items-center justify-between border-b border-zinc-900 bg-[#0b0c0f] px-5">
+        <div className="flex items-center gap-4">
+          <Link href="/" className="flex items-center gap-3">
+            <Logo size={32} showText={false} />
+            <span className="text-sm font-semibold tracking-tight text-white">AtlasLM</span>
+          </Link>
+          <div className="hidden h-6 w-px bg-zinc-800 md:block" />
+          <div className="hidden items-center gap-2 text-xs text-zinc-500 md:flex">
+            <Database className="h-3.5 w-3.5" />
+            <span>{selectedWorkspace?.name || "No notebook selected"}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="hidden items-center gap-2 rounded border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-300 sm:flex">
+            <span className={`h-2 w-2 rounded-full ${engineStatus === "active" ? "bg-emerald-400" : engineStatus === "loading" ? "bg-amber-300" : "bg-zinc-600"}`} />
+            <span>{engineStatus === "active" ? "AtlasLM Engine" : engineStatus === "loading" ? "Checking engine" : "Local Engine"}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDeepResearchOpen(true)}
+            className="hidden h-9 items-center gap-2 rounded border border-emerald-400/20 bg-emerald-400/10 px-3 text-sm font-medium text-emerald-100 hover:bg-emerald-400/15 md:flex"
+          >
+            <Sparkles className="h-4 w-4" />
+            Discover
+          </button>
+          <UserMenu />
+        </div>
+      </header>
+
+      <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)_360px] max-xl:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="flex min-h-0 flex-col border-r border-zinc-900 bg-[#0b0c0f]">
+          <div className="border-b border-zinc-900 p-4">
+            <form onSubmit={handleCreateWorkspace} className="flex gap-2">
+              <input
+                value={newWorkspaceName}
+                onChange={(event) => setNewWorkspaceName(event.target.value)}
+                placeholder="New notebook"
+                className="h-10 min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
+              />
+              <button
+                type="submit"
+                className="flex h-10 w-10 items-center justify-center rounded bg-zinc-100 text-zinc-950 hover:bg-white"
+                title="Create notebook"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </form>
+          </div>
+
+          <div className="border-b border-zinc-900 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Notebooks</span>
+              <span className="rounded bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-500">{workspaces.length}</span>
+            </div>
+            <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+              {workspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  type="button"
+                  onClick={() => setSelectedWorkspace(workspace)}
+                  className={`flex w-full items-center justify-between rounded border px-3 py-2 text-left text-sm transition ${
+                    selectedWorkspace?.id === workspace.id
+                      ? "border-zinc-700 bg-zinc-900 text-white"
+                      : "border-transparent text-zinc-400 hover:bg-zinc-900/70 hover:text-zinc-100"
+                  }`}
+                >
+                  <span className="truncate">{workspace.name}</span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-zinc-600" />
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Sources</span>
+              <button
+                type="button"
+                onClick={() => setShowAddSource(true)}
+                disabled={!selectedWorkspace}
+                className="flex h-8 items-center gap-2 rounded bg-zinc-100 px-2.5 text-xs font-semibold text-zinc-950 hover:bg-white disabled:opacity-40"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                Add
+              </button>
+            </div>
+
+            <div className="relative mb-3">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
+              <input
+                value={sourceFilter}
+                onChange={(event) => setSourceFilter(event.target.value)}
+                placeholder="Search sources"
+                className="h-9 w-full rounded border border-zinc-800 bg-zinc-950 pl-9 pr-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
+              />
+            </div>
+
+            <div className="mb-3 grid grid-cols-3 gap-2">
+              <div className="rounded border border-zinc-800 bg-zinc-950 p-2">
+                <div className="text-base font-semibold text-white">{readySources.length}</div>
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Ready</div>
+              </div>
+              <div className="rounded border border-zinc-800 bg-zinc-950 p-2">
+                <div className="text-base font-semibold text-white">{processingSources.length}</div>
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Indexing</div>
+              </div>
+              <div className="rounded border border-zinc-800 bg-zinc-950 p-2">
+                <div className="text-base font-semibold text-white">{failedSources.length}</div>
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Failed</div>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+              {filteredSources.length === 0 ? (
+                <div className="flex h-36 items-center justify-center rounded border border-dashed border-zinc-800 text-center text-sm text-zinc-600">
+                  No sources
+                </div>
+              ) : (
+                filteredSources.map((source) => {
+                  const Icon = sourceIcon(source.file_type);
+                  const isBusy = source.status === "pending" || source.status === "processing";
+                  return (
+                    <div key={source.id} className="group rounded border border-zinc-850 bg-zinc-950/70 p-3">
+                      <div className="flex items-start gap-3">
+                        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded border ${sourceTone(source.file_type)}`}>
+                          {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-zinc-100" title={source.filename}>{source.filename}</div>
+                          <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-500">
+                            <span className="uppercase">{source.file_type}</span>
+                            <span>{source.status}</span>
+                            <span>{formatDate(source.created_at)}</span>
+                          </div>
+                          {source.error_message && <div className="mt-1 text-[11px] text-red-300">{source.error_message}</div>}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteDocument(source.id)}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-zinc-600 opacity-0 hover:bg-red-500/10 hover:text-red-300 group-hover:opacity-100"
+                          title="Delete source"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </aside>
+
+        <main className="flex min-h-0 flex-col bg-[#090a0d]">
+          <div className="flex shrink-0 items-center justify-between border-b border-zinc-900 px-5 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {viewButton("ask", "Ask", MessageSquare)}
+              {viewButton("notes", "Notes", BookOpen)}
+              {viewButton("studio", "Studio", Wand2)}
+              {viewButton("canvas", "Map", Map)}
+              {viewButton("agent", "Agent", Bot)}
+            </div>
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
+              <span className="rounded border border-zinc-800 bg-zinc-950 px-2 py-1">{userTier}</span>
+              <span>{readySources.length} ready sources</span>
+            </div>
+          </div>
+
+          {uiError && (
+            <div className="mx-5 mt-4 flex items-center gap-2 rounded border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span className="min-w-0 flex-1">{uiError}</span>
+              <button type="button" onClick={() => setUiError("")} className="text-red-200 hover:text-white">Dismiss</button>
+            </div>
+          )}
+
+          {view === "ask" && (
+            <section className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                {activeScopeNode && (
+                  <div className="mb-4 inline-flex items-center gap-2 rounded border border-violet-400/20 bg-violet-400/10 px-3 py-1.5 text-xs text-violet-100">
+                    <span>{activeScopeNode.title}</span>
+                    <span className="text-violet-300">{activeScopeNode.count} sources</span>
+                    <button type="button" onClick={() => setActiveScopeNode(null)} className="text-violet-200 hover:text-white">Clear</button>
+                  </div>
+                )}
+
+                {messages.length === 0 && !streamingText ? (
+                  <div className="mx-auto flex max-w-3xl flex-col gap-5 pt-12">
+                    <div className="rounded border border-zinc-800 bg-zinc-950/70 p-5">
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-10 w-10 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
+                          <Sparkles className="h-5 w-5" />
+                        </span>
+                        <div>
+                          <h1 className="text-xl font-semibold text-white">Ask this notebook</h1>
+                          <p className="mt-1 text-sm text-zinc-500">Answers stay grounded in the selected source set.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {SUGGESTED_PROMPTS.map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          onClick={() => handleSendChatMessage(undefined, prompt)}
+                          disabled={readySources.length === 0 || chatLoading}
+                          className="rounded border border-zinc-800 bg-zinc-950/70 p-4 text-left text-sm text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mx-auto flex max-w-4xl flex-col gap-5">
+                    {messages.map((message) => {
+                      const isUser = message.role === "user";
+                      return (
+                        <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+                          <div className={`max-w-[82%] rounded border p-4 text-sm leading-6 ${
+                            isUser
+                              ? "border-zinc-700 bg-zinc-100 text-zinc-950"
+                              : "border-zinc-800 bg-zinc-950/80 text-zinc-200"
+                          }`}>
+                            {isUser ? message.content : renderMessageContent(message.content, message.citations)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {streamingText && (
+                      <div className="flex justify-start">
+                        <div className="max-w-[82%] rounded border border-zinc-800 bg-zinc-950/80 p-4 text-sm leading-6 text-zinc-200">
+                          {renderMessageContent(streamingText)}
+                          <span className="ml-1 inline-block h-4 w-1 animate-pulse bg-emerald-300 align-middle" />
+                        </div>
+                      </div>
+                    )}
+                    <div ref={messagesEndRef} />
+                  </div>
+                )}
+              </div>
+
+              <div className="shrink-0 border-t border-zinc-900 bg-[#0b0c0f] p-4">
+                <form onSubmit={(event) => handleSendChatMessage(event)} className="mx-auto flex max-w-4xl items-center gap-3">
+                  <input
+                    value={chatInput}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    disabled={chatLoading || readySources.length === 0}
+                    placeholder={readySources.length === 0 ? "Add sources before asking" : "Ask a cited question"}
+                    className="h-12 min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-950 px-4 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600 disabled:opacity-50"
+                  />
+                  <button
+                    type="submit"
+                    disabled={chatLoading || !chatInput.trim() || readySources.length === 0}
+                    className="flex h-12 w-12 items-center justify-center rounded bg-emerald-300 text-zinc-950 hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    title="Send"
+                  >
+                    {chatLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+                  </button>
+                </form>
+              </div>
+            </section>
+          )}
+
+          {view === "notes" && (
+            <section className="flex min-h-0 flex-1 flex-col p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h1 className="text-xl font-semibold text-white">Notebook notes</h1>
+                  <p className="mt-1 text-sm text-zinc-500">Saved locally for this notebook.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveNotesAsSource}
+                  disabled={!notes.trim() || notesSaving || !selectedWorkspace}
+                  className="flex h-10 items-center gap-2 rounded bg-zinc-100 px-3 text-sm font-semibold text-zinc-950 hover:bg-white disabled:opacity-40"
+                >
+                  {notesSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                  Add as source
+                </button>
+              </div>
+              <textarea
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+                className="min-h-0 flex-1 resize-none rounded border border-zinc-800 bg-zinc-950/70 p-5 text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
+                placeholder="Write research notes, open questions, and synthesis drafts."
+              />
+            </section>
+          )}
+
+          {view === "studio" && (
+            <section className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] gap-4 p-5 max-lg:grid-cols-1">
+              <div className="min-h-0 overflow-y-auto rounded border border-zinc-800 bg-zinc-950/60 p-4">
+                <div className="mb-4 flex items-center justify-between">
+                  <h1 className="text-lg font-semibold text-white">Studio</h1>
+                  <span className="text-xs text-zinc-500">{studioOutputs.length} outputs</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {STUDIO_CARDS.map((card) => {
+                    const Icon = card.icon;
+                    return (
+                      <button
+                        key={card.id}
+                        type="button"
+                        onClick={() => generateStudioOutput(card.id)}
+                        className={`rounded border p-3 text-left ${card.accent} hover:bg-opacity-20`}
+                      >
+                        <Icon className="h-4 w-4" />
+                        <div className="mt-2 text-sm font-semibold text-white">{card.label}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-5 space-y-2">
+                  {studioOutputs.map((output) => (
+                    <button
+                      key={output.id}
+                      type="button"
+                      onClick={() => setOpenOutput(output)}
+                      className={`w-full rounded border p-3 text-left transition ${
+                        openOutput?.id === output.id ? "border-zinc-600 bg-zinc-900" : "border-zinc-800 bg-zinc-950 hover:bg-zinc-900/70"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-white">{output.title}</div>
+                          <div className="mt-1 text-[11px] uppercase tracking-wide text-zinc-500">{outputLabel(output.output_type)}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {(output.status === "pending" || output.status === "processing") && <Loader2 className="h-4 w-4 animate-spin text-amber-300" />}
+                          {output.status === "ready" && <CheckCircle2 className="h-4 w-4 text-emerald-300" />}
+                          {output.status === "failed" && <AlertTriangle className="h-4 w-4 text-red-300" />}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="min-h-0 overflow-y-auto rounded border border-zinc-800 bg-zinc-950/40 p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">{openOutput?.title || "Output viewer"}</h2>
+                    {openOutput && <div className="mt-1 text-xs text-zinc-500">{outputLabel(openOutput.output_type)} - {openOutput.status}</div>}
+                  </div>
+                  {openOutput && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteStudioOutput(openOutput.id)}
+                      className="flex h-9 w-9 items-center justify-center rounded border border-zinc-800 text-zinc-500 hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-200"
+                      title="Delete output"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                {renderOutputPreview(openOutput)}
+              </div>
+            </section>
+          )}
+
+          {view === "canvas" && (
+            <section className="relative min-h-0 flex-1 overflow-hidden">
+              {selectedWorkspace ? (
+                <ResearchCanvas
+                  workspaceId={selectedWorkspace.id}
+                  documents={sources}
+                  studioOutputs={studioOutputs}
+                  onAddSourceClick={() => setShowAddSource(true)}
+                  onAskClick={(scopeNode) => {
+                    setActiveScopeNode(scopeNode || null);
+                    setView("ask");
+                  }}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-zinc-500">Select a notebook</div>
+              )}
+            </section>
+          )}
+
+          {view === "agent" && (
+            <section className="min-h-0 flex-1 overflow-y-auto p-5">
+              <div className="grid gap-4 lg:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setView("ask")}
+                  className="rounded border border-emerald-400/20 bg-emerald-400/10 p-5 text-left hover:bg-emerald-400/15"
+                >
+                  <Bot className="h-5 w-5 text-emerald-200" />
+                  <div className="mt-3 text-lg font-semibold text-white">Source expert</div>
+                  <div className="mt-2 text-sm text-zinc-400">Grounded Q&A, citations, scoped synthesis.</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeepResearchOpen(true)}
+                  className="rounded border border-sky-400/20 bg-sky-400/10 p-5 text-left hover:bg-sky-400/15"
+                >
+                  <Search className="h-5 w-5 text-sky-200" />
+                  <div className="mt-3 text-lg font-semibold text-white">Source discovery</div>
+                  <div className="mt-2 text-sm text-zinc-400">Find sources, ingest selected results, continue in the notebook.</div>
+                </button>
+                <div className="rounded border border-zinc-800 bg-zinc-950/60 p-5">
+                  <FileText className="h-5 w-5 text-violet-200" />
+                  <div className="mt-3 text-lg font-semibold text-white">Deliverable builder</div>
+                  <div className="mt-2 text-sm text-zinc-400">Reports, guides, quizzes, flashcards, maps.</div>
+                </div>
+                <div className="rounded border border-zinc-800 bg-zinc-950/60 p-5">
+                  <Video className="h-5 w-5 text-amber-200" />
+                  <div className="mt-3 text-lg font-semibold text-white">Video briefs</div>
+                  <div className="mt-2 text-sm text-zinc-400">Short video and narrated slide generation need the next backend service.</div>
+                </div>
+              </div>
+            </section>
+          )}
+        </main>
+
+        <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-zinc-900 bg-[#0b0c0f] p-4 max-xl:hidden">
+          <div className="rounded border border-zinc-800 bg-zinc-950/70 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-white">Notebook state</h2>
+                <p className="mt-1 text-xs text-zinc-500">{selectedWorkspace?.name || "No notebook"}</p>
+              </div>
+              <span className={`rounded px-2 py-1 text-[10px] font-semibold uppercase ${
+                engineStatus === "active" ? "bg-emerald-400/10 text-emerald-200" : "bg-zinc-800 text-zinc-400"
+              }`}>
+                {engineStatus === "active" ? "AI ready" : "Local"}
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              <div>
+                <div className="text-xl font-semibold text-white">{sources.length}</div>
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Sources</div>
+              </div>
+              <div>
+                <div className="text-xl font-semibold text-white">{messages.length}</div>
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Messages</div>
+              </div>
+              <div>
+                <div className="text-xl font-semibold text-white">{studioOutputs.length}</div>
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Outputs</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded border border-zinc-800 bg-zinc-950/70 p-4">
+            <h2 className="text-sm font-semibold text-white">Generate</h2>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {STUDIO_CARDS.map((card) => {
+                const Icon = card.icon;
+                return (
+                  <button
+                    key={card.id}
+                    type="button"
+                    onClick={() => generateStudioOutput(card.id)}
+                    className="rounded border border-zinc-800 bg-zinc-900/40 p-3 text-left hover:bg-zinc-900"
+                  >
+                    <Icon className="h-4 w-4 text-zinc-300" />
+                    <div className="mt-2 text-xs font-semibold text-white">{card.label}</div>
                   </button>
                 );
               })}
             </div>
           </div>
-        </div>
 
-        {/* User / Settings footer */}
-        <div className="flex flex-col gap-2 border-t border-zinc-900/60 pt-4">
-          <button
-            onClick={() => setShowSettings(true)}
-            className="w-full flex items-center justify-between px-3 py-2 text-xs text-zinc-400 hover:text-white transition-colors hover:bg-zinc-900/40 rounded-lg cursor-pointer"
-          >
-            <span className="flex items-center gap-2">
-              <SettingsIcon />
-              AtlasLM Settings
-            </span>
-            <span className="text-[9px] uppercase font-bold tracking-wider text-orange-500 bg-orange-950/20 border border-orange-500/20 px-1.5 py-0.5 rounded">
-              {atlasProviderLabel}
-            </span>
-          </button>
-        </div>
-      </aside>
-
-      {/* COLUMN 2: CENTRAL WORKSPACE (Grounded Chat) */}
-      <section className="flex-grow flex flex-col justify-between bg-zinc-950">
-        
-        {/* Workspace header */}
-        <header className="h-14 border-b border-zinc-900/60 px-6 flex items-center justify-between flex-shrink-0 bg-zinc-950/90 backdrop-blur">
-          <div className="flex items-center gap-3">
-            <span className="text-zinc-650 text-xs">Active Workspace /</span>
-            <span className="text-white text-xs font-bold">{selectedWorkspace?.name || "No active workspace"}</span>
-          </div>
-
-          {/* Chat / Studio Tab Toggle */}
-          <div className="flex bg-zinc-900 p-0.5 rounded-lg border border-zinc-800">
-            <button
-              onClick={() => setActiveTab("canvas")}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all cursor-pointer ${
-                activeTab === "canvas"
-                  ? "bg-zinc-800 text-white shadow-sm"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-            >
-              Research Canvas
-            </button>
-            <button
-              onClick={() => setActiveTab("chat")}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all cursor-pointer ${
-                activeTab === "chat"
-                  ? "bg-zinc-800 text-white shadow-sm"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-            >
-              Grounded Chat
-            </button>
-            <button
-              onClick={() => { if (userTier !== 'Free') setActiveTab("studio"); }}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 ${
-                activeTab === "studio"
-                  ? "bg-zinc-800 text-white shadow-sm"
-                  : "text-zinc-400 hover:text-zinc-200"
-              } ${userTier === 'Free' ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-            >
-              <span>AtlasLM Studio</span>
-              {userTier === 'Free' && <LockIcon />}
-            </button>
-          </div>
-        </header>
-
-        {uiError && (
-          <div className="mx-6 mt-4 rounded-lg border border-red-500/30 bg-red-950/20 px-3 py-2 text-[11px] text-red-300">
-            {uiError}
-          </div>
-        )}
-
-        {/* Tab Content Rendering */}
-        {activeTab === "canvas" ? (
-          <div className="flex-grow relative overflow-hidden bg-zinc-950">
-            {selectedWorkspace && (
-              <ResearchCanvas
+          {selectedWorkspace && token && (
+            <div className="mt-4 rounded border border-zinc-800 bg-zinc-950/70 p-4">
+              <AudioOverviewPanel
                 workspaceId={selectedWorkspace.id}
-                documents={sources.map(s => ({
-                  id: s.id,
-                  filename: s.filename,
-                  file_type: s.file_type,
-                  status: s.status,
-                  created_at: s.created_at
-                }))}
-                studioOutputs={studioOutputs}
-                onAddSourceClick={() => setShowAddSource(true)}
-                onAskClick={(scopeNode) => {
-                  if (scopeNode) {
-                    setActiveScopeNode(scopeNode);
-                  } else {
-                    setActiveScopeNode(null);
-                  }
-                  setActiveTab("chat");
-                }}
+                token={token}
+                docIds={readySources.map((source) => source.id)}
               />
-            )}
-          </div>
-        ) : activeTab === "studio" ? (
-          <div className="flex-grow overflow-y-auto p-6 flex flex-col gap-6">
-            {openOutput ? (
-              /* Reader View */
-              <div className="max-w-3xl mx-auto w-full flex flex-col gap-4">
-                <div className="flex items-center justify-between border-b border-zinc-900/60 pb-4">
-                  <div>
-                    <button
-                      onClick={() => setOpenOutput(null)}
-                      className="text-orange-500 hover:text-orange-400 text-xs font-bold mb-1 flex items-center gap-1 cursor-pointer"
-                    >
-                      &larr; Back to Studio outputs
-                    </button>
-                    <div className="flex items-center gap-2.5">
-                      <h2 className="text-white text-lg font-bold">{openOutput.title}</h2>
-                      {openOutput.synthesis_node_id && (() => {
-                        const node = synthesisNodes.find((n) => n.id === openOutput.synthesis_node_id);
-                        return (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-purple-950/40 text-purple-400 border border-purple-500/30">
-                            Scoped to: {node ? node.title : "Synthesis Node"}
-                          </span>
-                        );
-                      })()}
-                    </div>
-                    <span className="text-[9px] uppercase tracking-wider font-bold text-zinc-500 bg-zinc-900 px-2 py-0.5 rounded mt-1.5 inline-block">
-                      {openOutput.output_type.replace("_", " ")}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteStudioOutput(openOutput.id)}
-                    className="bg-red-950/40 text-red-400 border border-red-900/30 hover:bg-red-900/20 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
-                  >
-                    Delete Output
-                  </button>
-                </div>
-                
-                <div className="bg-zinc-950/30 border border-zinc-900/60 p-6 rounded-xl">
-                  {(() => {
-                    let parsedContent = null;
-                    if (typeof openOutput.content === "string") {
-                      try {
-                        parsedContent = JSON.parse(openOutput.content);
-                      } catch {
-                        parsedContent = openOutput.content;
-                      }
-                    } else {
-                      parsedContent = openOutput.content;
-                    }
-
-                    if (!parsedContent) {
-                      return <p className="text-zinc-500 text-xs">No content generated.</p>;
-                    }
-
-                    if (openOutput.output_type === "mind_map") {
-                      return renderMindMap(parsedContent);
-                    } else if (openOutput.output_type === "study_guide") {
-                      return <StudyGuideRenderer content={parsedContent} />;
-                    } else if (openOutput.output_type === "quiz") {
-                      return <QuizRenderer content={parsedContent} />;
-                    } else if (openOutput.output_type === "flashcards") {
-                      return <FlashcardsRenderer content={parsedContent} />;
-                    }
-
-                    return <p className="text-zinc-200 text-xs leading-relaxed whitespace-pre-wrap font-sans">{String(parsedContent)}</p>;
-                  })()}
-                  
-                  {renderCitationsFooter(openOutput.citations || [])}
-                </div>
-              </div>
-            ) : (
-              /* Grid / Main List View */
-              <div className="max-w-3xl mx-auto w-full flex flex-col gap-6">
-                <div className="border-b border-zinc-900/60 pb-4">
-                  <h2 className="text-white font-extrabold text-base">AtlasLM Studio</h2>
-                  <p className="text-[10px] text-zinc-550">Generate structured, grounded outputs from your workspace sources.</p>
-                </div>
-
-                {/* Generator Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                  {[
-                    { id: "mind_map", title: "Mind Map", desc: "Build a visual concept map.", icon: "🧠" },
-                    { id: "study_guide", title: "Study Guide", desc: "Interactive accordion guide.", icon: "📖" },
-                    { id: "quiz", title: "Interactive Quiz", desc: "Generate multi-choice questions.", icon: "❓" },
-                    { id: "flashcards", title: "Flashcards", desc: "Memorize facts with flip cards.", icon: "🎴" },
-                  ].map((card) => (
-                    <button
-                      key={card.id}
-                      onClick={() => generateStudioOutput(card.id)}
-                      disabled={!hasReadySources}
-                      className="flex flex-col text-left p-4 rounded-xl border border-zinc-900 bg-zinc-950/40 hover:border-zinc-800 transition duration-200 hover:-translate-y-0.5 disabled:opacity-40 disabled:pointer-events-none"
-                    >
-                      <span className="text-xl mb-2.5 inline-block p-1.5 rounded-lg bg-zinc-900">{card.icon}</span>
-                      <span className="text-white text-xs font-bold mb-1">{card.title}</span>
-                      <span className="text-[10px] text-zinc-500 leading-snug">{card.desc}</span>
-                    </button>
-                  ))}
-                </div>
-
-                {/* Outputs List */}
-                <div className="flex flex-col gap-3 mt-4">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">History & Saved Outputs</span>
-                  {studioOutputs.length === 0 ? (
-                    <div className="text-center p-12 border border-zinc-900 border-dashed rounded-xl">
-                      <p className="text-xs text-zinc-500">No Studio outputs generated yet. Choose a format above to begin.</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {studioOutputs.map((out) => {
-                        const isPending = out.status === "pending" || out.status === "processing";
-                        const isFailed = out.status === "failed";
-                        return (
-                          <div
-                            key={out.id}
-                            onClick={() => !isPending && !isFailed && setOpenOutput(out)}
-                            className={`p-4 rounded-xl border transition-all flex flex-col justify-between h-36 ${
-                              isPending
-                                ? "border-zinc-900 bg-zinc-900/20"
-                                : isFailed
-                                ? "border-red-950/40 bg-red-950/5"
-                                : "border-zinc-900 bg-zinc-950/30 hover:border-zinc-800 cursor-pointer hover:bg-zinc-900/10"
-                            }`}
-                          >
-                            <div>
-                              <div className="flex items-start justify-between gap-2">
-                                <h3 className="text-white text-xs font-bold line-clamp-2">{out.title}</h3>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteStudioOutput(out.id);
-                                  }}
-                                  className="text-zinc-650 hover:text-red-500 transition-colors p-1"
-                                >
-                                  <TrashIcon />
-                                </button>
-                              </div>
-                              <span className="text-[9px] uppercase tracking-wider font-bold text-zinc-500 bg-zinc-900/60 px-1.5 py-0.5 rounded mt-1.5 inline-block">
-                                {out.output_type.replace("_", " ")}
-                              </span>
-                            </div>
-
-                            <div className="mt-4 flex items-center justify-between text-[10px]">
-                              {isPending ? (
-                                <span className="text-orange-500 font-bold flex items-center gap-1.5">
-                                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                                  </svg>
-                                  Generating...
-                                </span>
-                              ) : isFailed ? (
-                                <span className="text-red-500 font-bold max-w-[200px] truncate" title={out.error || out.error_message || "Generation failed"}>
-                                  Failed: {out.error || out.error_message || "Unknown error"}
-                                </span>
-                              ) : (
-                                <span className="text-zinc-550">Ready</span>
-                              )}
-                              <span className="text-zinc-600 text-[9px]">
-                                {new Date(out.created_at).toLocaleDateString()}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          /* Chat Window Tab Content */
-          <div className="flex-grow overflow-y-auto p-6 flex flex-col gap-6">
-            {messages.length === 0 && !streamingText ? (
-              /* Empty State */
-              <div className="flex-grow flex flex-col items-center justify-center text-center max-w-md mx-auto">
-                <span className="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-6">
-                  <WorkspaceIcon />
-                </span>
-                <h2 className="text-white font-extrabold text-base mb-2">Initialize Grounded Research</h2>
-                <p className="text-xs text-zinc-500 leading-relaxed">
-                  Create notebook → Add source → Ask question. Start by creating/selecting a notebook, then ingest a PDF, DOCX, TXT, MD, or CSV file, website URL, or pasted text.
-                </p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-6 max-w-3xl mx-auto w-full">
-                {messages.map((msg) => {
-                  const isUser = msg.role === "user";
-                  return (
-                    <div
-                      key={msg.id}
-                      className={`flex flex-col gap-2 max-w-[85%] ${isUser ? "self-end items-end" : "self-start items-start"}`}
-                    >
-                      <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-600">
-                        {isUser ? "You" : "AtlasLM"}
-                      </span>
-                      <div
-                        className={`p-4 rounded-xl text-xs leading-relaxed border ${
-                          isUser
-                            ? "bg-zinc-900 border-zinc-800 text-white"
-                            : "bg-zinc-950/30 border-zinc-900/60 text-zinc-200"
-                        }`}
-                      >
-                        {isUser ? msg.content : renderMessageContentWithCitations(msg.content, msg.citations)}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* SSE Live Streaming text chunk render */}
-                {streamingText && (
-                  <div className="flex flex-col gap-2 max-w-[85%] self-start items-start">
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-600">AtlasLM</span>
-                    <div className="p-4 rounded-xl text-xs leading-relaxed border bg-zinc-950/30 border-zinc-900/60 text-zinc-200">
-                      {renderMessageContentWithCitations(streamingText)}
-                      <span className="inline-block w-1.5 h-3 ml-1 bg-orange-500 animate-pulse" />
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
-
-
-        {/* Message Input Box */}
-        <div className="p-6 border-t border-zinc-900/60 flex-shrink-0 bg-zinc-950">
-          {activeScopeNode && (
-            <div className="max-w-3xl mx-auto mb-3 flex items-center gap-2">
-              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-[10px] font-bold bg-purple-950/40 text-purple-400 border border-purple-500/30">
-                <span>Scoped to: {activeScopeNode.title} ({activeScopeNode.count} sources)</span>
-                <button
-                  type="button"
-                  onClick={() => setActiveScopeNode(null)}
-                  className="hover:text-purple-200 transition-colors cursor-pointer"
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M18 6L6 18M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
             </div>
           )}
-          <form onSubmit={handleSendChatMessage} className="max-w-3xl mx-auto relative flex items-center">
-            <input
-              type="text"
-              placeholder={chatLoading ? "Grounded AI thinking..." : "Ask your notebook sources a question..."}
-              disabled={chatLoading || !hasReadySources}
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              className="w-full bg-zinc-900/70 border border-zinc-850 rounded-xl py-4 pl-4 pr-14 text-xs text-zinc-150 placeholder-zinc-600 focus:outline-none focus:border-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            />
-            <button
-              type="submit"
-              disabled={chatLoading || !chatInput.trim() || !hasReadySources}
-              className="absolute right-3 bg-white p-2 rounded-lg transition-all hover:scale-105 active:scale-95 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
-            >
-              <SendIcon />
+
+          <div className="mt-4 rounded border border-zinc-800 bg-zinc-950/70 p-4">
+            <h2 className="text-sm font-semibold text-white">Agent actions</h2>
+            <div className="mt-3 space-y-2">
+              <button
+                type="button"
+                onClick={() => setDeepResearchOpen(true)}
+                className="flex w-full items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
+              >
+                <span className="flex items-center gap-2"><Search className="h-4 w-4" /> Discover sources</span>
+                <ChevronRight className="h-4 w-4 text-zinc-600" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("notes")}
+                className="flex w-full items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
+              >
+                <span className="flex items-center gap-2"><BookOpen className="h-4 w-4" /> Open notes</span>
+                <ChevronRight className="h-4 w-4 text-zinc-600" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("canvas")}
+                className="flex w-full items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
+              >
+                <span className="flex items-center gap-2"><Map className="h-4 w-4" /> Map sources</span>
+                <ChevronRight className="h-4 w-4 text-zinc-600" />
+              </button>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      {selectedCitation && (
+        <div className="fixed bottom-4 right-4 z-50 w-[420px] rounded border border-emerald-400/20 bg-[#0b0c0f] p-4 shadow-2xl shadow-black/60">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Citation</div>
+              <div className="mt-1 max-w-[340px] truncate text-sm font-medium text-white">
+                {selectedCitation.filename || "Source"}
+              </div>
+            </div>
+            <button type="button" onClick={() => setSelectedCitation(null)} className="text-zinc-500 hover:text-white">
+              Close
             </button>
-          </form>
-          {!hasReadySources && (
-            <p className="text-[10px] text-center text-zinc-650 mt-2 font-medium">Add at least one grounded source in the right-hand panel to open the chat window.</p>
-          )}
-        </div>
-      </section>
-
-      {/* COLUMN 3: RIGHT PANEL (Sources Explorer & Citation drawer) */}
-      {activeTab !== "canvas" && (
-        <aside className="w-80 bg-zinc-950 border-l border-zinc-900/60 flex flex-col p-4 gap-6 flex-shrink-0">
-        
-        {/* Source ingestion area */}
-        <div className="flex flex-col gap-3">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Sources Library</span>
-          {selectedWorkspace ? (
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={() => setShowAddSource(true)}
-                className="w-full py-3 px-4 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 text-[11px] font-bold uppercase tracking-wider text-orange-500 hover:border-orange-500/40 hover:bg-orange-950/5 transition-all text-center cursor-pointer flex items-center justify-center gap-2 group"
-              >
-                <UploadIcon />
-                <span>Add Source</span>
-              </button>
-              <button
-                onClick={() => { if (userTier !== 'Free') setDrOpen(true); }}
-                className={`w-full py-3 px-4 rounded-xl border border-dashed text-[11px] font-bold uppercase tracking-wider transition-all text-center flex items-center justify-center gap-2 group ${
-                  userTier === 'Free'
-                    ? "border-zinc-900 bg-zinc-900/20 text-zinc-650 opacity-50 cursor-not-allowed"
-                    : "border-zinc-800 bg-zinc-900/40 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900/60 cursor-pointer"
-                }`}
-              >
-                <span>🔭 Deep Research</span>
-                {userTier === 'Free' && <LockIcon />}
-              </button>
-            </div>
-          ) : (
-            <p className="text-[10px] text-zinc-650">Select a notebook to add sources.</p>
-          )}
-        </div>
-
-        {/* Uploading progress states */}
-        {uploadProgress && (
-          <div className="p-3 rounded-lg bg-zinc-900 border border-zinc-850 flex flex-col gap-2">
-            <div className="flex items-center justify-between text-[10px]">
-              <span className="text-white font-semibold truncate max-w-[150px]">{uploadProgress.fileName}</span>
-              <span className="text-orange-500 font-medium flex items-center gap-1.5">
-                <RefreshIcon />
-                {uploadProgress.progress}%
-              </span>
-            </div>
-            <p className="text-[9px] text-zinc-500">{uploadProgress.status}</p>
-            <div className="w-full h-1 bg-zinc-950 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-orange-500 to-red-500 transition-all duration-300"
-                style={{ width: `${uploadProgress.progress}%` }}
-              />
-            </div>
           </div>
-        )}
-
-        {/* Sources List */}
-        <div className="flex-grow flex flex-col gap-3 min-h-0">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Ingested Sources ({sources.length})</span>
-          <div className="flex-grow overflow-y-auto flex flex-col gap-2 pr-1">
-            {sources.length === 0 ? (
-              <div className="flex-grow flex items-center justify-center text-center p-8 border border-zinc-900 border-dashed rounded-xl">
-                <p className="text-[10px] text-zinc-600">No sources grounded yet. Add a file, website, or pasted text source to begin research.</p>
-              </div>
+          <div className="mb-3 text-xs text-zinc-500">
+            {selectedCitation.file_type === "youtube" && selectedCitation.source_url ? (
+              <a
+                href={`${selectedCitation.source_url}&t=${parseTimeToSeconds(extractYoutubeTimestamp(selectedCitation.content || selectedCitation.text || ""))}s`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-emerald-200 hover:underline"
+              >
+                Open video timestamp
+              </a>
             ) : (
-              sources.map((src) => {
-                const isProcessing = src.status === "processing";
-                const isFailed = src.status === "failed";
-
-                return (
-                  <div
-                    key={src.id}
-                    className={`p-3 rounded-lg border flex items-center justify-between gap-3 group transition-colors ${
-                      isFailed
-                        ? "border-red-950/40 bg-red-950/5"
-                        : "border-zinc-900 bg-zinc-950/30"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      {/* Tiny visual document decorator */}
-                      <span className="w-6 h-6 rounded bg-zinc-900 border border-zinc-850 flex items-center justify-center flex-shrink-0">
-                        {isProcessing ? (
-                          <svg className="w-3.5 h-3.5 text-orange-500 animate-spin" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
-                        ) : (
-                          <svg className={`w-3.5 h-3.5 ${isFailed ? "text-red-500" : "text-zinc-400"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                        )}
-                      </span>
-                      <div className="flex flex-col min-w-0 flex-1">
-                        <span className="text-[11px] text-white font-semibold truncate">{src.filename}</span>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-[9px] text-zinc-500 uppercase font-medium">{src.file_type}</span>
-                          {isProcessing && (
-                            <span className="text-[9px] text-orange-500 font-bold flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-pulse" />
-                              Processing...
-                            </span>
-                          )}
-                          {isFailed && (
-                            <span
-                              className="text-[9px] text-red-500 font-bold cursor-help truncate max-w-[150px]"
-                              title={src.error_message || "Ingestion failed"}
-                            >
-                              Failed: {src.error_message || "Unknown error"}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    
-                    {/* Delete button */}
-                    <button
-                      onClick={() => handleDeleteDocument(src.id)}
-                      className={`transition-opacity p-1 hover:bg-red-950/20 border border-transparent hover:border-red-900/30 rounded cursor-pointer ${
-                        isFailed ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                      }`}
-                      title={isFailed ? "Remove failed upload" : "Delete source"}
-                    >
-                      <TrashIcon />
-                    </button>
-                  </div>
-                );
+              citationLabel({
+                page: selectedCitation.page_number,
+                sheet: selectedCitation.sheet,
+                timestamp: selectedCitation.timestamp,
+                origin: selectedCitation.origin,
+                source_label: selectedCitation.source_label,
+                external_url: selectedCitation.external_url,
+                venue: selectedCitation.venue,
               })
             )}
           </div>
+          <p className="max-h-44 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-3 text-sm leading-6 text-zinc-300">
+            {selectedCitation.content || selectedCitation.text || "No source text available."}
+          </p>
         </div>
-
-        {/* COLUMN 3 LOWER DRAWER: Citation Viewer Panel (NotebookLM inspired!) */}
-        <AnimatePresence>
-          {selectedCitation && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              className="p-4 rounded-xl border border-orange-500/20 bg-orange-950/5 flex flex-col gap-3 relative shadow-lg shadow-orange-950/5"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[9px] font-bold uppercase tracking-wider text-orange-400">
-                  Grounded Citation
-                </span>
-                <button
-                  onClick={() => setSelectedCitation(null)}
-                  className="text-[10px] text-zinc-550 hover:text-zinc-300 font-bold px-1.5 py-0.5 rounded cursor-pointer"
-                >
-                  Close
-                </button>
-              </div>
-              {(() => {
-                const isYoutube = selectedCitation.file_type === "youtube" || (selectedCitation.filename && selectedCitation.filename.endsWith(" (YouTube)"));
-                let displayName = selectedCitation.filename;
-                let watchUrl = "";
-                let ts = "";
-                if (isYoutube) {
-                  const cleanName = displayName.replace(/\s*\(YouTube\)$/i, "");
-                  ts = extractYoutubeTimestamp(selectedCitation.content || selectedCitation.text || "");
-                  displayName = ts ? `${cleanName} @ ${ts}` : cleanName;
-                  if (selectedCitation.source_url) {
-                    const seconds = parseTimeToSeconds(ts);
-                    watchUrl = `${selectedCitation.source_url}&t=${seconds}s`;
-                  }
-                }
-                return (
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[11px] text-white font-semibold truncate">{displayName}</span>
-                    <span className="text-[9px] text-zinc-550">
-                      {isYoutube ? (
-                        watchUrl && ts ? (
-                          <a
-                            href={watchUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-[9px] font-bold text-orange-500 hover:text-orange-400 hover:underline"
-                          >
-                            Watch at {ts} &rarr;
-                          </a>
-                        ) : (
-                          "YouTube"
-                        )
-                      ) : (
-                        citationLabel({
-                          page: selectedCitation.page_number,
-                          sheet: selectedCitation.sheet,
-                          timestamp: selectedCitation.timestamp,
-                          origin: selectedCitation.origin,
-                          source_label: selectedCitation.source_label,
-                          external_url: selectedCitation.external_url,
-                          venue: selectedCitation.venue,
-                        })
-                      )}
-                    </span>
-                  </div>
-                );
-              })()}
-              <p className="text-[10px] text-zinc-300 leading-relaxed bg-zinc-950/80 border border-zinc-900 rounded p-2.5 max-h-[120px] overflow-y-auto font-sans">
-                &quot;{selectedCitation.content}&quot;
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </aside>
-      )}
-
-      {selectedWorkspace && (
-        <StudioPanel
-          notebookId={selectedWorkspace.id}
-          selectedSourceIds={sources
-            .filter((s) => s.status === "ready" || !s.status || (s.status as string) === "grounded")
-            .map((s) => s.id)}
-          token={token}
-        />
       )}
 
       {showAddSource && selectedWorkspace && (
@@ -1719,20 +1255,17 @@ export default function Dashboard() {
         />
       )}
 
-      {drOpen && selectedWorkspace && (
+      {deepResearchOpen && selectedWorkspace && (
         <DeepResearchDrawer
-          open={drOpen}
-          onClose={() => setDrOpen(false)}
+          open={deepResearchOpen}
+          onClose={() => setDeepResearchOpen(false)}
           workspaceId={selectedWorkspace.id}
           token={token}
-          onIngested={() => {
-            fetchDocuments(selectedWorkspace.id);
-          }}
+          onIngested={() => fetchDocuments(selectedWorkspace.id)}
         />
       )}
 
       <OnboardingTour />
-
     </div>
   );
 }
