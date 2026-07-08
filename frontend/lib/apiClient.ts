@@ -10,19 +10,7 @@
  */
 
 import { supabaseBrowser } from "@/lib/supabaseClient";
-
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  process.env.NEXT_PUBLIC_API_BASE ||
-  "http://localhost:8000";
-
-function buildApiUrl(path: string): string {
-  const base = API_URL.replace(/\/$/, "");
-  if (base.endsWith("/api/v1") && path.startsWith("/api/v1/")) {
-    return `${base}${path.slice("/api/v1".length)}`;
-  }
-  return `${base}${path}`;
-}
+import { apiUrl } from "@/lib/apiBase";
 
 /**
  * Resolve the current Supabase access token, throwing if the user is
@@ -54,7 +42,7 @@ async function authHeaders(
 /** GET  -  authenticated JSON request. */
 async function get<T = unknown>(path: string): Promise<T> {
   const headers = await authHeaders({ "Content-Type": "application/json" });
-  const res = await fetch(buildApiUrl(path), { headers });
+  const res = await fetch(apiUrl(path), { headers });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`GET ${path} → ${res.status}: ${text}`);
@@ -65,7 +53,7 @@ async function get<T = unknown>(path: string): Promise<T> {
 /** POST  -  authenticated JSON request. */
 async function post<T = unknown>(path: string, body: unknown): Promise<T> {
   const headers = await authHeaders({ "Content-Type": "application/json" });
-  const res = await fetch(buildApiUrl(path), {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -83,7 +71,7 @@ async function postForm<T = unknown>(
   formData: FormData
 ): Promise<T> {
   const headers = await authHeaders(); // no Content-Type  -  browser auto-sets it with boundary
-  const res = await fetch(buildApiUrl(path), {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers,
     body: formData,
@@ -98,7 +86,7 @@ async function postForm<T = unknown>(
 /** DELETE  -  authenticated request. */
 async function del(path: string): Promise<void> {
   const headers = await authHeaders();
-  const res = await fetch(buildApiUrl(path), {
+  const res = await fetch(apiUrl(path), {
     method: "DELETE",
     headers,
   });
@@ -114,7 +102,7 @@ async function del(path: string): Promise<void> {
  */
 async function stream(path: string, body: unknown): Promise<Response> {
   const headers = await authHeaders({ "Content-Type": "application/json" });
-  const res = await fetch(buildApiUrl(path), {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -131,7 +119,7 @@ async function stream(path: string, body: unknown): Promise<Response> {
  */
 async function postRaw(path: string, body: unknown): Promise<Response> {
   const headers = await authHeaders({ "Content-Type": "application/json" });
-  return fetch(buildApiUrl(path), {
+  return fetch(apiUrl(path), {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -141,7 +129,7 @@ async function postRaw(path: string, body: unknown): Promise<Response> {
 /** PATCH  -  authenticated JSON request. */
 async function patch<T = unknown>(path: string, body: unknown): Promise<T> {
   const headers = await authHeaders({ "Content-Type": "application/json" });
-  const res = await fetch(buildApiUrl(path), {
+  const res = await fetch(apiUrl(path), {
     method: "PATCH",
     headers,
     body: JSON.stringify(body),
@@ -156,7 +144,7 @@ async function patch<T = unknown>(path: string, body: unknown): Promise<T> {
 /** PUT  -  authenticated JSON request. Handles 204 No Content safely. */
 async function put<T = unknown>(path: string, body: unknown): Promise<T> {
   const headers = await authHeaders({ "Content-Type": "application/json" });
-  const res = await fetch(buildApiUrl(path), {
+  const res = await fetch(apiUrl(path), {
     method: "PUT",
     headers,
     body: JSON.stringify(body),

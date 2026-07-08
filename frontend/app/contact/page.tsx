@@ -5,6 +5,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import Header from "../../components/layout/header";
 import Footer from "../../components/layout/footer";
+import { apiUrl } from "@/lib/apiBase";
 
 export default function ContactPage() {
   const [formData, setFormData] = useState({
@@ -52,7 +53,7 @@ export default function ContactPage() {
     }
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/v1/contact`, {
+      const response = await fetch(apiUrl("/contact"), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({

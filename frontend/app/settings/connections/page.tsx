@@ -7,8 +7,7 @@ import LiveSyncPanel from "@/app/components/connections/LiveSyncPanel";
 import Header from "@/components/layout/header";
 import Footer from "@/components/layout/footer";
 import Link from "next/link";
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { apiUrl } from "@/lib/apiBase";
 
 type DriveSource = { source_id: string; file_id: string; name: string; kind: string };
 
@@ -31,7 +30,7 @@ export default function ConnectionsPage() {
         // Fetch Drive-imported documents so LiveSyncPanel can list them
         if (wsId && tok) {
           try {
-            const res = await fetch(`${API}/api/v1/workspaces/${wsId}/documents`, {
+            const res = await fetch(apiUrl(`/workspaces/${wsId}/documents`), {
               headers: { Authorization: `Bearer ${tok}` },
             });
             if (res.ok) {
