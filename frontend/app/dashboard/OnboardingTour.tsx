@@ -26,8 +26,8 @@ export const TOUR_STEPS = [
     ),
   },
   {
-    title: "Research Canvas",
-    desc: "This is the screen behind you. Drag sources as nodes, pull wires between them to define what feeds your analysis, and watch insight flow. Click any wire to remove it; try it after the tour.",
+    title: "Source Map",
+    desc: "See your notebook as a working map: sources on one side, AtlasLM in the center, and generated outputs on the other. It shows what is ready, what is indexing, and where to go next.",
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="6" cy="6" r="3" />
@@ -38,7 +38,7 @@ export const TOUR_STEPS = [
   },
   {
     title: "Studio",
-    desc: "Turn sources into deliverables. Generate full grounded reports and executive summaries today; mind maps, audio overviews, quizzes and more are on the way.",
+    desc: "Turn sources into deliverables. Generate study guides, mind maps, quizzes, flashcards, and audio overviews from the material in your notebook.",
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z" />
@@ -251,10 +251,10 @@ export function OnboardingTour() {
               </div>
             )}
 
-            {/* STEP 3: Research Canvas */}
+            {/* STEP 3: Source Map */}
             {step === 2 && (
               <div className="tour-slide on">
-                <h3>Research Canvas</h3>
+                <h3>Source Map</h3>
                 <div className="pv-canvas">
                   <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} fill="none">
                     <path d="M 128 62 C 168 62, 168 110, 208 110" stroke="#22c55e" strokeWidth="1.5" opacity=".8" />
@@ -362,8 +362,8 @@ export function OnboardingTour() {
             </div>
             <h2>You&apos;re ready to research</h2>
             <p>
-              Add your first source, wire it on the canvas, and ask anything. Every answer stays grounded in your
-              material, with citations you can verify. Everything you just saw is live in this dashboard right now.
+              Add your first source, ask anything, and generate outputs when the source is ready. Every answer stays grounded
+              in your material, with citations you can verify.
             </p>
             <div
               className={`tour-optin ${optIn ? "checked" : ""}`}

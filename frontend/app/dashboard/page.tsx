@@ -32,10 +32,8 @@ import { supabaseBrowser, getCurrentProfile } from "@/lib/supabaseClient";
 import AddSourceModal from "@/app/components/sources/AddSourceModal";
 import DeepResearchDrawer from "@/app/components/research/DeepResearchDrawer";
 import AudioOverviewPanel from "@/app/components/audio/AudioOverviewPanel";
-import ResearchCanvas from "@/app/dashboard/ResearchCanvas";
 import { OnboardingTour } from "@/app/dashboard/OnboardingTour";
 import { citationLabel } from "@/lib/sources";
-import "@/app/dashboard/research-canvas.css";
 import "@/app/components/research/deep-research.css";
 
 type Workspace = {
@@ -489,7 +487,8 @@ export default function Dashboard() {
   const generateStudioOutput = async (outputType: StudioOutput["output_type"]) => {
     if (!selectedWorkspace) return;
     if (readySources.length === 0) {
-      setUiError("Add at least one ready source first.");
+      setUiError("Add a source first, then AtlasLM can generate cited outputs.");
+      setShowAddSource(true);
       return;
     }
 
@@ -674,6 +673,321 @@ export default function Dashboard() {
     return <pre className="overflow-auto rounded border border-zinc-800 bg-zinc-950 p-4 text-xs text-zinc-300">{JSON.stringify(content, null, 2)}</pre>;
   };
 
+  const renderAskEmptyState = () => {
+    if (readySources.length === 0) {
+      return (
+        <div className="mx-auto grid max-w-5xl gap-5 pt-10 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="rounded border border-zinc-800 bg-zinc-950/70 p-6">
+            <div className="flex items-start gap-4">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
+                <Sparkles className="h-6 w-6" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Personal source expert</p>
+                <h1 className="mt-2 text-2xl font-semibold text-white">Add your material, then ask AtlasLM.</h1>
+                <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+                  This notebook answers from your PDFs, notes, websites, and videos. Once a source is indexed, every answer can point back to the material it used.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-3 md:grid-cols-3">
+              <button
+                type="button"
+                onClick={() => setShowAddSource(true)}
+                disabled={!selectedWorkspace}
+                className="rounded border border-zinc-700 bg-zinc-100 p-4 text-left text-zinc-950 hover:bg-white disabled:opacity-40"
+              >
+                <Upload className="h-5 w-5" />
+                <div className="mt-3 text-sm font-semibold">Add files or links</div>
+                <p className="mt-1 text-xs leading-5 text-zinc-600">Upload PDFs, paste URLs, or bring in video transcripts.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeepResearchOpen(true)}
+                disabled={!selectedWorkspace}
+                className="rounded border border-sky-400/20 bg-sky-400/10 p-4 text-left text-sky-100 hover:bg-sky-400/15 disabled:opacity-40"
+              >
+                <Search className="h-5 w-5" />
+                <div className="mt-3 text-sm font-semibold text-white">Discover sources</div>
+                <p className="mt-1 text-xs leading-5 text-sky-100/70">Use the agent to find relevant sources and ingest the useful ones.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("notes")}
+                disabled={!selectedWorkspace}
+                className="rounded border border-violet-400/20 bg-violet-400/10 p-4 text-left text-violet-100 hover:bg-violet-400/15 disabled:opacity-40"
+              >
+                <BookOpen className="h-5 w-5" />
+                <div className="mt-3 text-sm font-semibold text-white">Start with notes</div>
+                <p className="mt-1 text-xs leading-5 text-violet-100/70">Draft notes here and add them as a grounded source.</p>
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded border border-zinc-800 bg-zinc-950/60 p-5">
+            <h2 className="text-sm font-semibold text-white">What unlocks after indexing</h2>
+            <div className="mt-4 space-y-4">
+              {[
+                ["Grounded Q&A", "Ask questions with inline source citations."],
+                ["Studio outputs", "Generate study guides, quizzes, flashcards, and maps."],
+                ["Audio overview", "Create a spoken summary from selected sources."],
+                ["Living notebook", "Keep notes and generated artifacts next to the source set."],
+              ].map(([title, body]) => (
+                <div key={title} className="flex gap-3">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                  <div>
+                    <div className="text-sm font-medium text-zinc-100">{title}</div>
+                    <div className="mt-1 text-xs leading-5 text-zinc-500">{body}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="mx-auto flex max-w-3xl flex-col gap-5 pt-12">
+        <div className="rounded border border-zinc-800 bg-zinc-950/70 p-5">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
+              <Sparkles className="h-5 w-5" />
+            </span>
+            <div>
+              <h1 className="text-xl font-semibold text-white">Ask this notebook</h1>
+              <p className="mt-1 text-sm text-zinc-500">Answers stay grounded in {readySources.length} ready source{readySources.length === 1 ? "" : "s"}.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-2 md:grid-cols-2">
+          {SUGGESTED_PROMPTS.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              onClick={() => handleSendChatMessage(undefined, prompt)}
+              disabled={chatLoading}
+              className="rounded border border-zinc-800 bg-zinc-950/70 p-4 text-left text-sm text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderSourceMap = () => {
+    if (!selectedWorkspace) {
+      return <div className="flex h-full items-center justify-center text-sm text-zinc-500">Select a notebook</div>;
+    }
+
+    const visibleSources = sources.slice(0, 7);
+    const visibleOutputs = studioOutputs.slice(0, 5);
+    const hasSources = sources.length > 0;
+
+    return (
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center justify-between border-b border-zinc-900 px-5 py-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Source map</p>
+            <h1 className="mt-1 text-xl font-semibold text-white">{selectedWorkspace.name}</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowAddSource(true)}
+              className="flex h-9 items-center gap-2 rounded bg-zinc-100 px-3 text-sm font-semibold text-zinc-950 hover:bg-white"
+            >
+              <Upload className="h-4 w-4" />
+              Add source
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("ask")}
+              className="flex h-9 items-center gap-2 rounded border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-200 hover:bg-zinc-900"
+            >
+              <MessageSquare className="h-4 w-4" />
+              Ask
+            </button>
+          </div>
+        </div>
+
+        <div className="grid min-h-0 flex-1 gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_290px]">
+          <div
+            className="relative min-h-[520px] overflow-hidden rounded border border-zinc-800 bg-[#08090b]"
+            style={{
+              backgroundImage: "radial-gradient(circle at 1px 1px, rgba(113,113,122,0.22) 1px, transparent 0)",
+              backgroundSize: "28px 28px",
+            }}
+          >
+            {!hasSources ? (
+              <div className="flex h-full min-h-[520px] flex-col items-center justify-center px-6 text-center">
+                <span className="flex h-14 w-14 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
+                  <Network className="h-7 w-7" />
+                </span>
+                <h2 className="mt-5 text-2xl font-semibold text-white">Your map starts with sources.</h2>
+                <p className="mt-3 max-w-md text-sm leading-6 text-zinc-400">
+                  Add at least one document, note, URL, or video. AtlasLM will turn it into a navigable research graph and cited assistant context.
+                </p>
+                <div className="mt-6 flex flex-wrap justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddSource(true)}
+                    className="flex h-10 items-center gap-2 rounded bg-zinc-100 px-4 text-sm font-semibold text-zinc-950 hover:bg-white"
+                  >
+                    <Upload className="h-4 w-4" />
+                    Add source
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeepResearchOpen(true)}
+                    className="flex h-10 items-center gap-2 rounded border border-sky-400/20 bg-sky-400/10 px-4 text-sm font-semibold text-sky-100 hover:bg-sky-400/15"
+                  >
+                    <Search className="h-4 w-4" />
+                    Discover
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid h-full min-h-[520px] grid-cols-[minmax(0,1fr)_180px_minmax(0,1fr)] gap-5 p-6 max-lg:grid-cols-1">
+                <div className="flex flex-col justify-center gap-3">
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Sources</div>
+                  {visibleSources.map((source) => {
+                    const Icon = sourceIcon(source.file_type);
+                    const isBusy = source.status === "pending" || source.status === "processing";
+                    return (
+                      <div key={source.id} className="rounded border border-zinc-800 bg-zinc-950/90 p-3 shadow-lg shadow-black/20">
+                        <div className="flex items-center gap-3">
+                          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded border ${sourceTone(source.file_type)}`}>
+                            {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-white" title={source.filename}>{source.filename}</div>
+                            <div className="mt-1 text-[11px] uppercase tracking-wide text-zinc-500">{source.file_type} - {source.status}</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {sources.length > visibleSources.length && (
+                    <div className="rounded border border-dashed border-zinc-800 bg-zinc-950/50 p-3 text-xs text-zinc-500">
+                      +{sources.length - visibleSources.length} more sources in this notebook
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-center">
+                  <div className="w-full rounded border border-emerald-400/25 bg-emerald-400/10 p-5 text-center">
+                    <Sparkles className="mx-auto h-7 w-7 text-emerald-200" />
+                    <div className="mt-3 text-base font-semibold text-white">AtlasLM Notebook</div>
+                    <div className="mt-2 text-xs leading-5 text-emerald-100/70">
+                      {readySources.length} ready / {processingSources.length} indexing / {failedSources.length} failed
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setView("ask")}
+                      className="mt-4 h-9 rounded bg-emerald-300 px-3 text-sm font-semibold text-zinc-950 hover:bg-emerald-200"
+                    >
+                      Ask all sources
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-col justify-center gap-3">
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Outputs</div>
+                  {visibleOutputs.length > 0 ? (
+                    visibleOutputs.map((output) => (
+                      <button
+                        key={output.id}
+                        type="button"
+                        onClick={() => {
+                          setOpenOutput(output);
+                          setView("studio");
+                        }}
+                        className="rounded border border-zinc-800 bg-zinc-950/90 p-3 text-left hover:bg-zinc-900"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-white">{output.title}</div>
+                            <div className="mt-1 text-[11px] uppercase tracking-wide text-zinc-500">{outputLabel(output.output_type)} - {output.status}</div>
+                          </div>
+                          {output.status === "ready" ? (
+                            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-300" />
+                          ) : output.status === "failed" ? (
+                            <AlertTriangle className="h-4 w-4 shrink-0 text-red-300" />
+                          ) : (
+                            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-300" />
+                          )}
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    STUDIO_CARDS.slice(0, 3).map((card) => {
+                      const Icon = card.icon;
+                      return (
+                        <button
+                          key={card.id}
+                          type="button"
+                          onClick={() => generateStudioOutput(card.id)}
+                          className="rounded border border-zinc-800 bg-zinc-950/90 p-3 text-left hover:bg-zinc-900"
+                        >
+                          <Icon className="h-4 w-4 text-zinc-300" />
+                          <div className="mt-2 text-sm font-medium text-white">Generate {card.label}</div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="min-h-0 overflow-y-auto rounded border border-zinc-800 bg-zinc-950/60 p-4">
+            <h2 className="text-sm font-semibold text-white">Notebook workflow</h2>
+            <div className="mt-4 space-y-3">
+              {[
+                ["Add", "Bring in PDFs, URLs, YouTube, or text notes.", sources.length > 0],
+                ["Index", "AtlasLM chunks and embeds the material for retrieval.", readySources.length > 0],
+                ["Ask", "Chat answers are constrained to your sources.", messages.length > 0],
+                ["Generate", "Create study guides, quizzes, flashcards, and maps.", studioOutputs.length > 0],
+              ].map(([title, body, done]) => (
+                <div key={String(title)} className="flex gap-3 rounded border border-zinc-800 bg-zinc-950/80 p-3">
+                  {done ? (
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                  ) : (
+                    <span className="mt-1 h-3 w-3 shrink-0 rounded-full border border-zinc-600" />
+                  )}
+                  <div>
+                    <div className="text-sm font-medium text-zinc-100">{title}</div>
+                    <div className="mt-1 text-xs leading-5 text-zinc-500">{body}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              <div className="rounded border border-zinc-800 bg-zinc-950 p-2 text-center">
+                <div className="text-lg font-semibold text-white">{readySources.length}</div>
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Ready</div>
+              </div>
+              <div className="rounded border border-zinc-800 bg-zinc-950 p-2 text-center">
+                <div className="text-lg font-semibold text-white">{processingSources.length}</div>
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Indexing</div>
+              </div>
+              <div className="rounded border border-zinc-800 bg-zinc-950 p-2 text-center">
+                <div className="text-lg font-semibold text-white">{studioOutputs.length}</div>
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Outputs</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  };
+
   const viewButton = (id: DashboardView, label: string, Icon: typeof MessageSquare) => (
     <button
       type="button"
@@ -806,8 +1120,19 @@ export default function Dashboard() {
 
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
               {filteredSources.length === 0 ? (
-                <div className="flex h-36 items-center justify-center rounded border border-dashed border-zinc-800 text-center text-sm text-zinc-600">
-                  No sources
+                <div className="rounded border border-dashed border-zinc-800 bg-zinc-950/50 p-4 text-sm text-zinc-500">
+                  <FileText className="h-5 w-5 text-zinc-600" />
+                  <div className="mt-3 font-medium text-zinc-300">No sources yet</div>
+                  <p className="mt-1 text-xs leading-5">Add a document, URL, YouTube video, or note to wake up this notebook.</p>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddSource(true)}
+                    disabled={!selectedWorkspace}
+                    className="mt-4 flex h-8 items-center gap-2 rounded bg-zinc-100 px-3 text-xs font-semibold text-zinc-950 hover:bg-white disabled:opacity-40"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    Add source
+                  </button>
                 </div>
               ) : (
                 filteredSources.map((source) => {
@@ -880,33 +1205,7 @@ export default function Dashboard() {
                 )}
 
                 {messages.length === 0 && !streamingText ? (
-                  <div className="mx-auto flex max-w-3xl flex-col gap-5 pt-12">
-                    <div className="rounded border border-zinc-800 bg-zinc-950/70 p-5">
-                      <div className="flex items-center gap-3">
-                        <span className="flex h-10 w-10 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
-                          <Sparkles className="h-5 w-5" />
-                        </span>
-                        <div>
-                          <h1 className="text-xl font-semibold text-white">Ask this notebook</h1>
-                          <p className="mt-1 text-sm text-zinc-500">Answers stay grounded in the selected source set.</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {SUGGESTED_PROMPTS.map((prompt) => (
-                        <button
-                          key={prompt}
-                          type="button"
-                          onClick={() => handleSendChatMessage(undefined, prompt)}
-                          disabled={readySources.length === 0 || chatLoading}
-                          className="rounded border border-zinc-800 bg-zinc-950/70 p-4 text-left text-sm text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  renderAskEmptyState()
                 ) : (
                   <div className="mx-auto flex max-w-4xl flex-col gap-5">
                     {messages.map((message) => {
@@ -1057,22 +1356,7 @@ export default function Dashboard() {
           )}
 
           {view === "canvas" && (
-            <section className="relative min-h-0 flex-1 overflow-hidden">
-              {selectedWorkspace ? (
-                <ResearchCanvas
-                  workspaceId={selectedWorkspace.id}
-                  documents={sources}
-                  studioOutputs={studioOutputs}
-                  onAddSourceClick={() => setShowAddSource(true)}
-                  onAskClick={(scopeNode) => {
-                    setActiveScopeNode(scopeNode || null);
-                    setView("ask");
-                  }}
-                />
-              ) : (
-                <div className="flex h-full items-center justify-center text-sm text-zinc-500">Select a notebook</div>
-              )}
-            </section>
+            renderSourceMap()
           )}
 
           {view === "agent" && (
