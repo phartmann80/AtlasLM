@@ -9,13 +9,13 @@ type RouteContext = {
 };
 
 const BLOCKED_TARGETS = [
-  "85.215.225.0",
   "localhost",
   "127.0.0.1",
 ];
 
 function configuredBackend(): string | null {
   const raw =
+    process.env.ATLAS_BACKEND_URL ||
     process.env.ATLAS_VERCEL_BACKEND_URL ||
     process.env.ATLAS_API_PROXY_TARGET ||
     "";
@@ -54,7 +54,7 @@ function backendNotConfigured() {
   return NextResponse.json(
     {
       detail:
-        "AtlasLM is no longer linked to the old self-hosted backend. Configure ATLAS_VERCEL_BACKEND_URL with the Vercel backend deployment URL.",
+        "AtlasLM backend is not configured. Set ATLAS_BACKEND_URL to the production FastAPI backend.",
     },
     { status: 503 },
   );
