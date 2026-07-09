@@ -387,7 +387,7 @@ class ProviderRegistry:
         self._llms = {}
         self._embeddings = {}
 
-        langdock_api_key = settings.LANGDOCK_API_KEY or settings.LANGDOCK_API_CODE
+        langdock_api_key = settings.LANGDOCK_API_CODE or settings.LANGDOCK_API_KEY
         langdock_model = settings.LANGDOCK_MODEL or settings.MODEL or "gpt-5-mini"
 
         if langdock_api_key:
