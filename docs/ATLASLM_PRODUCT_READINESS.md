@@ -21,6 +21,7 @@ Latest production smoke:
 - 2026-07-09: `node scripts/production-smoke.js` passed all checks against `https://www.atlaslm.cloud`.
 - 2026-07-09: Studio smoke coverage was expanded and passed for study guide, mind map, quiz, and flashcards.
 - 2026-07-09: Scanned PDF OCR fallback was added, deployed, and verified with an image-only PDF upload in production smoke.
+- 2026-07-09: Transcription language selection was added for YouTube and audio uploads. YouTube `language: "en"` ingestion passed production smoke; audio language pass-through was verified in the deployed backend container.
 
 ## Real And Verified
 
@@ -32,7 +33,7 @@ These paths have production smoke coverage:
 - Website ingestion for visible page text.
 - Image ingestion through OCR, with visual AI fallback when OCR finds no text.
 - Scanned/image-only PDF ingestion through OCR fallback.
-- YouTube ingestion for the two reported test videos.
+- YouTube ingestion for the two reported test videos, including explicit language selection.
 - Source-grounded chat over ready sources.
 - Studio study guide, mind map, quiz, and flashcard generation.
 - Audio Overview generation and playback through an authenticated WAV stream.
@@ -47,6 +48,7 @@ node scripts/production-smoke.js
 
 - Audio voice quality is functional but not final. The backend now produces audible speech through a packaged fallback when neural voice models are missing. A higher-quality Voicebox-style service is still needed.
 - YouTube works through captions first and media transcription fallback. Some private, members-only, region-restricted, or blocked videos can still fail because YouTube refuses access.
+- Audio file uploads pass a selected transcription language through the API, queue, worker, and Whisper loader. Production smoke does not yet upload a spoken audio fixture by default.
 - Image ingestion can index OCR text or a visual description. It is not a full vision Q&A system yet.
 - Deep Research/source discovery exists, but it still needs a dedicated production smoke test and better empty/error states.
 - Agent tab launches real app areas, but it is not yet a full autonomous agent with task planning and deliverable execution.
@@ -68,7 +70,6 @@ node scripts/production-smoke.js
    - Product readiness notes added.
 
 2. Core source ingestion hardening
-   - Add language choice for transcription.
    - Add generic media-link ingestion where feasible.
    - Improve error messaging for blocked media.
    - Continue expanding source-type smoke coverage.
@@ -89,9 +90,9 @@ node scripts/production-smoke.js
 
 ## Next Highest-Priority Task
 
-Add transcription language selection for audio and video sources.
+Add generic media-link ingestion for public social/video/audio URLs where feasible.
 
-Reason: users explicitly expect video and audio transcription in the language they choose, and the Android app will need the same stable API contract.
+Reason: users expect to paste YouTube, Instagram, TikTok, LinkedIn, and other media links into one source flow. YouTube is real; the broader media-link path is still the biggest visible ingestion gap.
 
 ## Operating Loop
 

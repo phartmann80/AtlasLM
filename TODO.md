@@ -19,6 +19,7 @@ Last updated: 2026-07-09
 - [x] Image source ingestion with visual fallback.
 - [x] Scanned PDF OCR fallback.
 - [x] YouTube ingestion for the two reported videos.
+- [x] Transcription language selection for YouTube and audio upload pipeline.
 - [x] Source-grounded chat.
 - [x] Studio study guide, mind map, quiz, and flashcard generation.
 - [x] Audio Overview generation and playback.
@@ -27,7 +28,7 @@ Last updated: 2026-07-09
 
 - [x] Add scanned PDF OCR fallback.
 - [x] Add scanned PDF OCR coverage to `scripts/production-smoke.js`.
-- [ ] Add transcription language selection for audio and video sources.
+- [x] Add transcription language selection for audio and video sources.
 - [ ] Add generic media link ingestion for social video URLs where feasible.
 - [ ] Replace Agent tab with real executable agent workflows.
 - [ ] Evaluate and integrate a production voice service.
