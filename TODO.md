@@ -7,8 +7,8 @@ Last updated: 2026-07-09
 - [x] Create a bounded hardening spec in `specs/atlaslm-hardening-loop.md`.
 - [x] Add a production smoke test runner in `scripts/production-smoke.js`.
 - [x] Add product readiness notes in `docs/ATLASLM_PRODUCT_READINESS.md`.
-- [ ] Run production smoke and record any failures.
-- [ ] Use failures to choose the next implementation slice.
+- [x] Run production smoke and record any failures.
+- [x] Use failures to choose the next implementation slice.
 
 ## Verified In Production
 
@@ -24,7 +24,7 @@ Last updated: 2026-07-09
 
 ## Next Engineering Queue
 
-- [ ] Extend smoke coverage to Studio mind map, quiz, and flashcards.
+- [ ] Extend `scripts/production-smoke.js` coverage to Studio mind map, quiz, and flashcards.
 - [ ] Fix any failing Studio output type.
 - [ ] Add scanned PDF OCR fallback.
 - [ ] Add transcription language selection for audio and video sources.

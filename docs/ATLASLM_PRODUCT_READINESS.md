@@ -16,6 +16,10 @@ Production backend:
 
 - Server-hosted FastAPI backend behind the Vercel API proxy.
 
+Latest production smoke:
+
+- 2026-07-09: `node scripts/production-smoke.js` passed all checks against `https://www.atlaslm.cloud`.
+
 ## Real And Verified
 
 These paths have production smoke coverage:
@@ -57,7 +61,7 @@ node scripts/production-smoke.js
 ## Loop Phases
 
 1. Production truth and regression harness
-   - Status: in progress.
+   - Status: complete for current critical paths.
    - Smoke runner added.
    - Product readiness notes added.
 
