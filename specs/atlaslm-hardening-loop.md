@@ -39,21 +39,21 @@ AtlasLM must behave like a source-grounded research assistant over user-provided
    - Stabilize mobile auth/session API expectations.
    - Create an Android client that can sign in, list notebooks, add sources, chat, and play audio.
 
-## Definition Of Done For This Loop Slice
+## Definition Of Done For Current Slice: Scanned PDF OCR
 
-This first slice is complete when:
+This slice is complete when:
 
-- A production smoke command exists and can be run locally without printing secrets.
-- The smoke command reports pass/fail for the critical app paths.
-- Project notes clearly list real, partial, mocked, and next features.
-- The smoke command is run against `https://www.atlaslm.cloud`.
-- Any failures found during the smoke are recorded with next actions.
+- PDF ingestion extracts normal embedded text as before.
+- PDF ingestion OCRs image-only/scanned pages when no embedded text is present.
+- Empty or unreadable PDFs still fail honestly with a useful error.
+- The production smoke command uploads an image-only PDF and verifies that it becomes a ready source.
+- Project notes record scanned PDF OCR as verified, or record the exact failure if it does not pass.
 
 ## Verification Commands
 
-- `node scripts/production-smoke.js`
-- `npm run build` from `frontend/` if frontend code changes
 - `python -m compileall backend/app` if backend code changes
+- `node --check scripts/production-smoke.js`
+- `node scripts/production-smoke.js`
 
 ## Iteration Budget
 

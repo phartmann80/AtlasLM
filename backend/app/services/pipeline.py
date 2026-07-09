@@ -1,4 +1,5 @@
 import fitz  # PyMuPDF
+import io
 import uuid
 import logging
 import asyncio
@@ -7,6 +8,8 @@ import re
 import tempfile
 from typing import List, Dict, Any, Optional
 
+from PIL import Image
+import pytesseract
 from sqlalchemy.orm import Session
 
 from ..models import Document, DocumentChunk
@@ -44,20 +47,50 @@ class DocumentPipeline:
             "Starting PDF extraction: %s (%d bytes)", filename, len(file_bytes)
         )
         pages_content = []
+        ocr_pages = 0
+        embedded_text_pages = 0
+        empty_pages = 0
+        doc = None
         try:
             doc = fitz.open(stream=file_bytes, filetype="pdf")
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
-                pages_content.append(
-                    {"page_number": page_num + 1, "content": page.get_text("text")}
-                )
-            doc.close()
+                page_number = page_num + 1
+                content = (page.get_text("text") or "").strip()
+                if content:
+                    embedded_text_pages += 1
+                else:
+                    try:
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                        with Image.open(io.BytesIO(pix.tobytes("png"))) as image:
+                            content = (pytesseract.image_to_string(image) or "").strip()
+                        if content:
+                            ocr_pages += 1
+                        else:
+                            empty_pages += 1
+                    except Exception as ocr_error:
+                        empty_pages += 1
+                        logger.warning(
+                            "PDF OCR fallback failed for %s page %d: %s",
+                            filename,
+                            page_number,
+                            ocr_error,
+                        )
+                pages_content.append({"page_number": page_number, "content": content})
             logger.info(
-                "PDF parsed: %s (%d pages)", filename, len(pages_content)
+                "PDF parsed: %s (%d pages, %d embedded text, %d OCR, %d empty)",
+                filename,
+                len(pages_content),
+                embedded_text_pages,
+                ocr_pages,
+                empty_pages,
             )
         except Exception as e:
             logger.error("PDF parser failure for %s: %s", filename, e, exc_info=True)
             raise ValueError(f"Failed to parse PDF {filename}: {e}")
+        finally:
+            if doc is not None:
+                doc.close()
         return pages_content
 
     def extract_text_from_txt_or_md(
@@ -318,8 +351,8 @@ class DocumentPipeline:
         if not chunks_data:
             raise ValueError(
                 f"No extractable text found in '{document.filename}'. "
-                "The file may be empty or contain only images "
-                "(scanned PDFs need OCR, which is not yet enabled)."
+                "The file may be empty, encrypted, corrupted, or too low quality "
+                "for text extraction or OCR."
             )
 
         contents = [c["content"] for c in chunks_data]
@@ -382,8 +415,8 @@ class DocumentPipeline:
         if not chunks_data:
             raise ValueError(
                 f"No extractable text found in '{filename}'. "
-                "The file may be empty or contain only images "
-                "(scanned PDFs need OCR, which is not yet enabled)."
+                "The file may be empty, encrypted, corrupted, or too low quality "
+                "for text extraction or OCR."
             )
 
         # 3. Embed FIRST (so a failure leaves no orphaned document record)

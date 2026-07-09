@@ -89,6 +89,116 @@ function tinyPngBuffer() {
   ]);
 }
 
+const OCR_FONT = {
+  A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+  C: ["01111", "10000", "10000", "10000", "10000", "10000", "01111"],
+  L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+  O: ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+  R: ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+  S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+  T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+};
+
+function scannedPdfBuffer() {
+  const width = 1600;
+  const height = 360;
+  const rgb = Buffer.alloc(width * height * 3, 255);
+  drawBitmapText(rgb, width, height, "ATLAS SCAN OCR", 60, 95, 18);
+
+  const imageStream = zlib.deflateSync(rgb);
+  const pageStream = Buffer.from(`q\n${width} 0 0 ${height} 0 0 cm\n/Im0 Do\nQ\n`, "ascii");
+  return pdfBuffer([
+    pdfObject(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+    pdfObject(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+    pdfObject(
+      3,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`,
+    ),
+    pdfObject(
+      4,
+      `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${imageStream.length} >>`,
+      imageStream,
+    ),
+    pdfObject(5, `<< /Length ${pageStream.length} >>`, pageStream),
+  ]);
+}
+
+function drawBitmapText(rgb, width, height, text, startX, startY, scale) {
+  let cursorX = startX;
+  for (const char of text.toUpperCase()) {
+    if (char === " ") {
+      cursorX += scale * 4;
+      continue;
+    }
+    const glyph = OCR_FONT[char];
+    if (!glyph) {
+      cursorX += scale * 6;
+      continue;
+    }
+    for (let row = 0; row < glyph.length; row += 1) {
+      for (let col = 0; col < glyph[row].length; col += 1) {
+        if (glyph[row][col] === "1") {
+          fillRect(rgb, width, height, cursorX + col * scale, startY + row * scale, scale, scale, 0, 0, 0);
+        }
+      }
+    }
+    cursorX += scale * 7;
+  }
+}
+
+function fillRect(rgb, width, height, x, y, rectWidth, rectHeight, r, g, b) {
+  const minX = Math.max(0, Math.floor(x));
+  const minY = Math.max(0, Math.floor(y));
+  const maxX = Math.min(width, Math.ceil(x + rectWidth));
+  const maxY = Math.min(height, Math.ceil(y + rectHeight));
+  for (let yy = minY; yy < maxY; yy += 1) {
+    for (let xx = minX; xx < maxX; xx += 1) {
+      const offset = (yy * width + xx) * 3;
+      rgb[offset] = r;
+      rgb[offset + 1] = g;
+      rgb[offset + 2] = b;
+    }
+  }
+}
+
+function pdfObject(id, body, stream = null) {
+  const header = Buffer.from(`${id} 0 obj\n${body}\n`, "ascii");
+  if (stream === null) {
+    return { id, buffer: Buffer.concat([header, Buffer.from("endobj\n", "ascii")]) };
+  }
+  return {
+    id,
+    buffer: Buffer.concat([
+      header,
+      Buffer.from("stream\n", "ascii"),
+      stream,
+      Buffer.from("\nendstream\nendobj\n", "ascii"),
+    ]),
+  };
+}
+
+function pdfBuffer(objects) {
+  const chunks = [Buffer.from("%PDF-1.4\n", "ascii")];
+  const offsets = [];
+  let size = chunks[0].length;
+  for (const object of objects) {
+    offsets[object.id] = size;
+    chunks.push(object.buffer);
+    size += object.buffer.length;
+  }
+
+  const maxId = Math.max(...objects.map((object) => object.id));
+  const xrefOffset = size;
+  let xref = `xref\n0 ${maxId + 1}\n0000000000 65535 f \n`;
+  for (let id = 1; id <= maxId; id += 1) {
+    xref += `${String(offsets[id]).padStart(10, "0")} 00000 n \n`;
+  }
+  xref += `trailer\n<< /Size ${maxId + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  chunks.push(Buffer.from(xref, "ascii"));
+  return Buffer.concat(chunks);
+}
+
 function pngChunk(type, data) {
   const typeBuffer = Buffer.from(type, "ascii");
   const length = Buffer.alloc(4);
@@ -290,6 +400,24 @@ async function main() {
       ? await pollDocument(headers, workspace.id, imageBody.id, 90000)
       : imageBody;
     check(results, "source.image.ready", finalImage?.status === "ready", finalImage?.error_message || finalImage?.status || "missing");
+
+    const scannedPdfForm = new FormData();
+    scannedPdfForm.append(
+      "file",
+      new Blob([scannedPdfBuffer()], { type: "application/pdf" }),
+      "atlas-scanned-ocr.pdf",
+    );
+    const scannedPdfRes = await fetch(`${BASE_URL}/api/v1/workspaces/${workspace.id}/documents`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.token}` },
+      body: scannedPdfForm,
+    });
+    const scannedPdfBody = await parseResponse(scannedPdfRes);
+    check(results, "source.pdf.scanned.accepted", scannedPdfRes.ok && Boolean(scannedPdfBody?.id), scannedPdfBody?.detail || scannedPdfRes.status);
+    const finalScannedPdf = scannedPdfRes.ok && scannedPdfBody?.status === "processing"
+      ? await pollDocument(headers, workspace.id, scannedPdfBody.id, 120000)
+      : scannedPdfBody;
+    check(results, "source.pdf.scanned.ready", finalScannedPdf?.status === "ready", finalScannedPdf?.error_message || finalScannedPdf?.status || "missing");
 
     if (!SKIP_YOUTUBE) {
       let index = 1;
