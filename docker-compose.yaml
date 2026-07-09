@@ -37,7 +37,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - LANGDOCK_API_KEY=${LANGDOCK_API_KEY}
       - LANGDOCK_API_CODE=${LANGDOCK_API_CODE}
-      - LANGDOCK_ENDPOINT_URL=https://api.langdock.com/openai/eu/v1
+      - LANGDOCK_ENDPOINT_URL=${LANGDOCK_ENDPOINT_URL:-https://api.langdock.com/openai/eu/v1}
       - LANGDOCK_MODEL=${LANGDOCK_MODEL}
       - MODEL=${MODEL}
       - BLACKBOX_API_KEY=${BLACKBOX_API_KEY}
@@ -92,7 +92,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - LANGDOCK_API_KEY=${LANGDOCK_API_KEY}
       - LANGDOCK_API_CODE=${LANGDOCK_API_CODE}
-      - LANGDOCK_ENDPOINT_URL=https://api.langdock.com/openai/eu/v1
+      - LANGDOCK_ENDPOINT_URL=${LANGDOCK_ENDPOINT_URL:-https://api.langdock.com/openai/eu/v1}
       - LANGDOCK_MODEL=${LANGDOCK_MODEL}
       - MODEL=${MODEL}
       - BLACKBOX_API_KEY=${BLACKBOX_API_KEY}
