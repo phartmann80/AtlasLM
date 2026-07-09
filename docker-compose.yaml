@@ -3,12 +3,13 @@ version: '3.8'
 services:
   db:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: atlaslm
       POSTGRES_PASSWORD: ${DB_PASSWORD:-atlaspass}
       POSTGRES_DB: atlaslm_db
     ports:
-      - "5435:5432" # Isolated host port mapping to avoid database port conflicts
+      - "127.0.0.1:5435:5432" # Local-only host access; services use Docker network.
     volumes:
       - atlaslm_data:/var/lib/postgresql/data
       - ./docker/init:/docker-entrypoint-initdb.d # Mount init SQL for pgvector extension
@@ -20,8 +21,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
-      - "6385:6379" # Isolated host port mapping to avoid caching port conflicts
+      - "127.0.0.1:6385:6379" # Local-only host access; services use Docker network.
     volumes:
       - atlaslm_redis:/data
 
@@ -29,17 +31,25 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql://atlaslm:${DB_PASSWORD:-atlaspass}@db:5432/atlaslm_db
       - REDIS_URL=redis://redis:6379/0
       - LANGDOCK_API_KEY=${LANGDOCK_API_KEY}
+      - LANGDOCK_API_CODE=${LANGDOCK_API_CODE}
       - LANGDOCK_ENDPOINT_URL=https://api.langdock.com/openai/eu/v1
+      - LANGDOCK_MODEL=${LANGDOCK_MODEL}
+      - MODEL=${MODEL}
       - BLACKBOX_API_KEY=${BLACKBOX_API_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - JWT_SECRET=${JWT_SECRET}
       - ATLAS_ACTIVE_PROVIDER=${ATLAS_ACTIVE_PROVIDER}
       - SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
       - SEARXNG_URL=${SEARXNG_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
       - RESEARCH_HTTP_TIMEOUT=${RESEARCH_HTTP_TIMEOUT}
@@ -81,13 +91,20 @@ services:
       - DATABASE_URL=postgresql://atlaslm:${DB_PASSWORD:-atlaspass}@db:5432/atlaslm_db
       - REDIS_URL=redis://redis:6379/0
       - LANGDOCK_API_KEY=${LANGDOCK_API_KEY}
+      - LANGDOCK_API_CODE=${LANGDOCK_API_CODE}
       - LANGDOCK_ENDPOINT_URL=https://api.langdock.com/openai/eu/v1
+      - LANGDOCK_MODEL=${LANGDOCK_MODEL}
+      - MODEL=${MODEL}
       - BLACKBOX_API_KEY=${BLACKBOX_API_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - JWT_SECRET=${JWT_SECRET}
       - ATLAS_ACTIVE_PROVIDER=${ATLAS_ACTIVE_PROVIDER}
       - SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
       - SEARXNG_URL=${SEARXNG_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
       - RESEARCH_HTTP_TIMEOUT=${RESEARCH_HTTP_TIMEOUT}
