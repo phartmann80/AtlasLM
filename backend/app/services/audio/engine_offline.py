@@ -15,6 +15,7 @@ import os
 import shutil
 import struct
 import subprocess
+import tempfile
 import wave
 from typing import List
 
@@ -51,6 +52,8 @@ class OfflineTTSEngine(TTSEngine):
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
         if self._have_models():
             return self._render_real(lines, out_path)
+        if shutil.which("espeak-ng"):
+            return self._render_espeak(lines, out_path)
         return self._render_timed_silence(lines, out_path)
 
     # -- real path: render each line, concatenate with short gaps -----------
@@ -70,6 +73,46 @@ class OfflineTTSEngine(TTSEngine):
             frames += pcm + gap_frames
             cursor += len(pcm) / 2 / SAMPLE_RATE + GAP_SEC
         self._write_wav(out_path, bytes(frames))
+        return round(cursor, 2)
+
+    # -- audible fallback: packaged system TTS when neural voices are absent -
+    def _render_espeak(self, lines: List[ScriptLine], out_path: str) -> float:
+        frames = bytearray()
+        params = None
+        cursor = 0.0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for idx, ln in enumerate(lines):
+                ln.start = round(cursor, 2)
+                voice = "en+f3" if ln.speaker == "A" else "en+m3"
+                line_path = os.path.join(tmp, f"line-{idx}.wav")
+                subprocess.run(
+                    ["espeak-ng", "-v", voice, "-s", "155", "-w", line_path, ln.text],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True,
+                )
+                with wave.open(line_path, "rb") as src:
+                    if params is None:
+                        params = src.getparams()
+                    line_frames = src.readframes(src.getnframes())
+                    rate = src.getframerate()
+                    width = src.getsampwidth()
+                    channels = src.getnchannels()
+
+                frames += line_frames
+                cursor += len(line_frames) / (rate * width * channels)
+                gap = b"\x00" * int(rate * width * channels * GAP_SEC)
+                frames += gap
+                cursor += GAP_SEC
+
+        if params is None:
+            return self._render_timed_silence(lines, out_path)
+
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with wave.open(out_path, "wb") as out:
+            out.setparams(params)
+            out.writeframes(bytes(frames))
         return round(cursor, 2)
 
     # -- dev fallback: a correctly-timed silent track ----------------------

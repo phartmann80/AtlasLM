@@ -194,7 +194,7 @@ export default function AddSourceModal({
           {active === null ? (
             <>
               <h2>Add a source to AtlasLM</h2>
-              <p className="sub">Sources let AtlasLM ground every answer in your own material.</p>
+              <p className="sub">Sources are the material Atlas AI can quote, summarize, and cite in this notebook.</p>
 
               <div className="web-find">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2" strokeLinecap="round">
@@ -290,7 +290,7 @@ export default function AddSourceModal({
                   </div>
                   <div>
                     <div className="sr-name">Link or video</div>
-                    <div className="sr-desc">Web pages and YouTube transcripts</div>
+                    <div className="sr-desc">Articles, docs, pages, and YouTube transcripts</div>
                   </div>
                 </button>
 
@@ -303,7 +303,7 @@ export default function AddSourceModal({
                   </div>
                   <div>
                     <div className="sr-name">Website</div>
-                    <div className="sr-desc">Paste any page URL</div>
+                    <div className="sr-desc">Extract visible page text for citations</div>
                   </div>
                 </button>
 
@@ -403,7 +403,7 @@ export default function AddSourceModal({
               {active === "website" && (
                 <>
                   <h2>Ingest Website</h2>
-                  <p className="sub">Paste a website page URL to parse its content. Bare domains are accepted.</p>
+                  <p className="sub">Use this for articles, docs, reports, or pages you want Atlas AI to cite. AtlasLM extracts visible page text and indexes it as a notebook source.</p>
                   <div className="mt-4 flex flex-col gap-3">
                     <input
                       type="text"

@@ -21,6 +21,14 @@ from .config import settings
 logger = logging.getLogger("atlaslm.providers")
 
 
+def normalize_model_name(value: Optional[str], fallback: str = "gpt-5-mini") -> str:
+    """Resolve operator-friendly placeholders to a concrete provider model."""
+    model = (value or "").strip()
+    if not model or model.lower() in {"auto", "default"}:
+        return fallback
+    return model
+
+
 class ProviderError(Exception):
     """Sanitized error safe to surface to API clients."""
 
@@ -388,7 +396,10 @@ class ProviderRegistry:
         self._embeddings = {}
 
         langdock_api_key = settings.LANGDOCK_API_CODE or settings.LANGDOCK_API_KEY
-        langdock_model = settings.LANGDOCK_MODEL or settings.MODEL or "gpt-5-mini"
+        langdock_model = normalize_model_name(
+            settings.LANGDOCK_MODEL or settings.MODEL,
+            fallback="gpt-5-mini",
+        )
 
         if langdock_api_key:
             self._llms["langdock"] = OpenAICompatibleLLM(

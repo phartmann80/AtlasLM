@@ -1518,16 +1518,27 @@ export default function Dashboard() {
                   <div className="mt-3 text-lg font-semibold text-white">Source discovery</div>
                   <div className="mt-2 text-sm text-zinc-400">Find sources, ingest selected results, continue in the notebook.</div>
                 </button>
-                <div className="rounded border border-zinc-800 bg-zinc-950/60 p-5">
+                <button
+                  type="button"
+                  onClick={() => setView("studio")}
+                  className="rounded border border-violet-400/20 bg-violet-400/10 p-5 text-left hover:bg-violet-400/15"
+                >
                   <FileText className="h-5 w-5 text-violet-200" />
                   <div className="mt-3 text-lg font-semibold text-white">Deliverable builder</div>
                   <div className="mt-2 text-sm text-zinc-400">Reports, guides, quizzes, flashcards, maps.</div>
-                </div>
-                <div className="rounded border border-zinc-800 bg-zinc-950/60 p-5">
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUiError("Short video briefs need the next video generation service. You can add video sources now.");
+                    void openAddSource();
+                  }}
+                  className="rounded border border-amber-400/20 bg-amber-400/10 p-5 text-left hover:bg-amber-400/15"
+                >
                   <Video className="h-5 w-5 text-amber-200" />
                   <div className="mt-3 text-lg font-semibold text-white">Video briefs</div>
                   <div className="mt-2 text-sm text-zinc-400">Short video and narrated slide generation need the next backend service.</div>
-                </div>
+                </button>
               </div>
             </section>
           )}

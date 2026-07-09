@@ -25,7 +25,17 @@ def load_youtube(url: str) -> List[ExtractedBlock]:
     # 1) Captions (fast, no download)
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
-        entries = YouTubeTranscriptApi.get_transcript(vid)
+
+        if hasattr(YouTubeTranscriptApi, "get_transcript"):
+            entries = YouTubeTranscriptApi.get_transcript(vid)
+        else:
+            transcript = YouTubeTranscriptApi().fetch(
+                vid,
+                languages=("en", "en-US", "en-GB"),
+                preserve_formatting=False,
+            )
+            entries = transcript.to_raw_data()
+
         blocks = [
             block(e["text"].strip(), timestamp=e["start"])
             for e in entries if e.get("text", "").strip()
@@ -44,7 +54,14 @@ def load_youtube(url: str) -> List[ExtractedBlock]:
             "format": "bestaudio/best",
             "outtmpl": out,
             "quiet": True,
+            "no_warnings": True,
             "noplaylist": True,
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
+                )
+            },
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
