@@ -20,6 +20,7 @@ Latest production smoke:
 
 - 2026-07-09: `node scripts/production-smoke.js` passed all checks against `https://www.atlaslm.cloud`.
 - 2026-07-09: Studio smoke coverage was expanded and passed for study guide, mind map, quiz, and flashcards.
+- 2026-07-09: Scanned PDF OCR fallback was added, deployed, and verified with an image-only PDF upload in production smoke.
 
 ## Real And Verified
 
@@ -30,6 +31,7 @@ These paths have production smoke coverage:
 - Pasted text and notebook notes as ready sources.
 - Website ingestion for visible page text.
 - Image ingestion through OCR, with visual AI fallback when OCR finds no text.
+- Scanned/image-only PDF ingestion through OCR fallback.
 - YouTube ingestion for the two reported test videos.
 - Source-grounded chat over ready sources.
 - Studio study guide, mind map, quiz, and flashcard generation.
@@ -57,7 +59,6 @@ node scripts/production-smoke.js
 - Native Android app.
 - Invite email delivery.
 - Google/GitHub signup buttons.
-- Scanned PDF OCR fallback.
 
 ## Loop Phases
 
@@ -70,7 +71,7 @@ node scripts/production-smoke.js
    - Add language choice for transcription.
    - Add generic media-link ingestion where feasible.
    - Improve error messaging for blocked media.
-   - Add scanned PDF OCR.
+   - Continue expanding source-type smoke coverage.
 
 3. Agent and Studio completion
    - Make Agent tab execute real workflows.
@@ -88,9 +89,9 @@ node scripts/production-smoke.js
 
 ## Next Highest-Priority Task
 
-Add scanned PDF OCR fallback so image-only PDFs can become usable sources instead of failed files.
+Add transcription language selection for audio and video sources.
 
-Reason: PDF ingestion is a core user promise, scanned PDFs are common research material, and Android users will expect uploaded scans to work.
+Reason: users explicitly expect video and audio transcription in the language they choose, and the Android app will need the same stable API contract.
 
 ## Operating Loop
 

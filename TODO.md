@@ -17,6 +17,7 @@ Last updated: 2026-07-09
 - [x] Pasted text source ingestion.
 - [x] Website source ingestion.
 - [x] Image source ingestion with visual fallback.
+- [x] Scanned PDF OCR fallback.
 - [x] YouTube ingestion for the two reported videos.
 - [x] Source-grounded chat.
 - [x] Studio study guide, mind map, quiz, and flashcard generation.
@@ -24,8 +25,8 @@ Last updated: 2026-07-09
 
 ## Next Engineering Queue
 
-- [ ] Add scanned PDF OCR fallback.
-- [ ] Add scanned PDF OCR coverage to `scripts/production-smoke.js`.
+- [x] Add scanned PDF OCR fallback.
+- [x] Add scanned PDF OCR coverage to `scripts/production-smoke.js`.
 - [ ] Add transcription language selection for audio and video sources.
 - [ ] Add generic media link ingestion for social video URLs where feasible.
 - [ ] Replace Agent tab with real executable agent workflows.
