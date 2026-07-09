@@ -73,7 +73,10 @@ def _describe_image_with_engine(path: str) -> str:
 
 def load_image(path: str) -> List[ExtractedBlock]:
     img = Image.open(path)
-    text = pytesseract.image_to_string(img) or ""
+    try:
+        text = pytesseract.image_to_string(img) or ""
+    except Exception:
+        text = ""
     text = text.strip()
     if not text:
         description = _describe_image_with_engine(path).strip()
