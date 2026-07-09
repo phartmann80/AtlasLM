@@ -38,12 +38,16 @@ def detect_kind(path_or_url: str) -> str:
     return EXT_MAP.get(os.path.splitext(low)[1], "unknown")
 
 
-def extract_blocks(kind: str, path_or_url: str) -> List[ExtractedBlock]:
+def extract_blocks(
+    kind: str,
+    path_or_url: str,
+    language: Optional[str] = None,
+) -> List[ExtractedBlock]:
     if kind == "docx":    return load_docx(path_or_url)
     if kind == "pptx":    return load_pptx(path_or_url)
     if kind == "xlsx":    return load_spreadsheet(path_or_url)
     if kind == "image":   return load_image(path_or_url)
-    if kind == "audio":   return transcribe_audio(path_or_url)
-    if kind == "youtube": return load_youtube(path_or_url)
+    if kind == "audio":   return transcribe_audio(path_or_url, language=language)
+    if kind == "youtube": return load_youtube(path_or_url, language=language)
     raise ValueError(f"No Patch-003 loader for kind '{kind}'. "
                      f"(pdf/web are handled by existing loaders.)")

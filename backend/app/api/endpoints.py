@@ -22,6 +22,7 @@ from ..services.youtube_extract import (
     extract_youtube_transcript, YouTubeExtractError, extract_video_id,
 )
 from ..services.ingest.youtube_loader import load_youtube
+from ..services.transcription_language import normalize_transcription_language
 from ..services.pipeline import DocumentPipeline
 from ..services.rag import RAGService
 from ..core.providers import provider_registry, ProviderError
@@ -197,6 +198,7 @@ async def upload_document(
     request: Request,
     workspace_id: uuid.UUID,
     file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     uid = current_user_id(request)
@@ -237,6 +239,13 @@ async def upload_document(
             detail="Invalid file format. Supported: PDF, DOCX, XLSX, PPTX, TXT, MD, CSV, PNG, JPG, WEBP, MP3, WAV, M4A, AAC, OGG, FLAC.",
         )
 
+    try:
+        transcription_language = (
+            normalize_transcription_language(language) if file_type == "audio" else None
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     pipeline = DocumentPipeline(db)
 
     # Async path: create placeholder doc, enqueue job, return 202.
@@ -253,6 +262,7 @@ async def upload_document(
                 filename=filename,
                 file_type=file_type,
                 file_bytes=file_bytes,
+                language=transcription_language,
             )
         except Exception:
             # Queue push failed after doc creation - fall back to sync.
@@ -271,6 +281,7 @@ async def upload_document(
             filename=filename,
             file_bytes=file_bytes,
             file_type=file_type,
+            language=transcription_language,
         )
         return doc
     except ProviderError as e:
@@ -818,12 +829,20 @@ async def ingest_youtube(
     _get_owned_workspace(workspace_id, uid, db)
 
     url = _normalize_public_url(str(body.url))
+    try:
+        transcription_language = normalize_transcription_language(body.language)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     try:
-        result = await extract_youtube_transcript(url)
+        result = await extract_youtube_transcript(url, language=transcription_language)
     except YouTubeExtractError as primary_error:
         try:
-            blocks = await asyncio.to_thread(load_youtube, url)
+            blocks = await asyncio.to_thread(
+                load_youtube,
+                url,
+                transcription_language,
+            )
             transcript_text = _blocks_to_transcript_markdown(blocks)
             if not transcript_text:
                 raise ValueError("No transcript text was produced.")
@@ -832,7 +851,7 @@ async def ingest_youtube(
                 "text": transcript_text,
                 "title": f"YouTube {video_id}",
                 "video_id": video_id,
-                "language": "auto",
+                "language": transcription_language or "auto",
             }
         except Exception:
             raise HTTPException(
@@ -867,6 +886,7 @@ async def ingest_youtube(
                 file_type="youtube",
                 file_bytes=file_bytes,
                 source_url=canonical_url,
+                language=transcription_language,
             )
         except Exception:
             db.delete(doc)
@@ -885,6 +905,7 @@ async def ingest_youtube(
             file_bytes=file_bytes,
             file_type="youtube",
             source_url=canonical_url,
+            language=transcription_language,
         )
         return doc
     except ProviderError as e:

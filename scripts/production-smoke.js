@@ -425,7 +425,7 @@ async function main() {
         const res = await fetch(`${BASE_URL}/api/v1/workspaces/${workspace.id}/documents/youtube`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ url }),
+          body: JSON.stringify({ url, language: "en" }),
         });
         const body = await parseResponse(res);
         check(results, `source.youtube.${index}.accepted`, res.ok && Boolean(body?.id), body?.detail || res.status);

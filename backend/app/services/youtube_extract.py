@@ -25,6 +25,8 @@ from xml.etree import ElementTree
 
 import httpx
 
+from .transcription_language import normalize_transcription_language
+
 logger = logging.getLogger("atlaslm.youtube")
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -86,8 +88,11 @@ def _parse_player_response(watch_html: str) -> Dict[str, Any]:
         )
 
 
-def _pick_caption_track(player: Dict[str, Any]) -> Tuple[str, str]:
-    """Returns (baseUrl, language). Prefers manual > auto, English > first."""
+def _pick_caption_track(
+    player: Dict[str, Any],
+    language: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Returns (baseUrl, language). Prefers requested language, then manual/English."""
     tracks = (
         player.get("captions", {})
         .get("playerCaptionsTracklistRenderer", {})
@@ -99,10 +104,21 @@ def _pick_caption_track(player: Dict[str, Any]) -> Tuple[str, str]:
             "cannot ingest it. Try a video with captions enabled."
         )
 
-    def rank(t: Dict[str, Any]) -> Tuple[int, int]:
+    normalized_language = normalize_transcription_language(language)
+    requested_primary = normalized_language.split("-")[0] if normalized_language else None
+
+    def rank(t: Dict[str, Any]) -> Tuple[int, int, int]:
+        code = str(t.get("languageCode", "")).lower()
+        requested = 0
+        if normalized_language:
+            requested = 0 if (
+                code == normalized_language or
+                (requested_primary is not None and code.startswith(f"{requested_primary}-")) or
+                code == requested_primary
+            ) else 1
         manual = 0 if t.get("kind") != "asr" else 1          # manual first
         is_en = 0 if str(t.get("languageCode", "")).startswith("en") else 1
-        return (manual, is_en)
+        return (requested, manual, is_en)
 
     best = sorted(tracks, key=rank)[0]
     return best["baseUrl"], best.get("languageCode", "unknown")
@@ -160,7 +176,10 @@ def _sectionize(cues: List[Dict[str, Any]], meta: Dict[str, str]) -> str:
     return "\n".join(l for l in lines if l is not None)
 
 
-async def extract_youtube_transcript(url: str) -> Dict[str, Any]:
+async def extract_youtube_transcript(
+    url: str,
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Main entry point. Returns:
       { "text": <sectioned markdown transcript>,
@@ -183,19 +202,20 @@ async def extract_youtube_transcript(url: str) -> Dict[str, Any]:
                     "AtlasLM could not access this video. It may be private, "
                     "members-only, or region-restricted."
                 )
-            base_url, language = _pick_caption_track(player)
+            normalized_language = normalize_transcription_language(language)
+            base_url, selected_language = _pick_caption_track(player, normalized_language)
             cues = await _fetch_transcript_xml(client, base_url)
             meta = _get_video_meta(player)
             text = _sectionize(cues, meta)
             logger.info(
                 "YouTube transcript extracted: %s (%s, %d cues, lang=%s)",
-                video_id, meta["title"][:60], len(cues), language,
+                video_id, meta["title"][:60], len(cues), selected_language,
             )
             return {
                 "text": text,
                 "title": meta["title"],
                 "video_id": video_id,
-                "language": language,
+                "language": selected_language,
             }
     except YouTubeExtractError:
         raise

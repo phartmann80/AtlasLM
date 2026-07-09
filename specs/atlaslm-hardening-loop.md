@@ -39,15 +39,17 @@ AtlasLM must behave like a source-grounded research assistant over user-provided
    - Stabilize mobile auth/session API expectations.
    - Create an Android client that can sign in, list notebooks, add sources, chat, and play audio.
 
-## Definition Of Done For Current Slice: Scanned PDF OCR
+## Definition Of Done For Current Slice: Language-Aware Transcription
 
 This slice is complete when:
 
-- PDF ingestion extracts normal embedded text as before.
-- PDF ingestion OCRs image-only/scanned pages when no embedded text is present.
-- Empty or unreadable PDFs still fail honestly with a useful error.
-- The production smoke command uploads an image-only PDF and verifies that it becomes a ready source.
-- Project notes record scanned PDF OCR as verified, or record the exact failure if it does not pass.
+- YouTube ingestion accepts an optional `language` value and still defaults to auto-detect when omitted.
+- YouTube caption selection prefers the requested language when available, then falls back to the current best caption behavior.
+- YouTube media transcription fallback passes the requested language to Whisper when provided.
+- Audio file uploads accept an optional `language` form field and pass it through the queue, worker, and Whisper transcription.
+- The Add Source modal exposes common transcription language choices for YouTube and audio uploads.
+- The production smoke command exercises YouTube ingestion with an explicit language value.
+- Project notes record language-aware transcription as verified, or record the exact failure if it does not pass.
 
 ## Verification Commands
 

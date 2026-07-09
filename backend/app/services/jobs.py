@@ -52,6 +52,7 @@ def enqueue_ingestion_job(
     file_type: str,
     file_bytes: bytes,
     source_url: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> str:
     """
     Store payload + metadata and push the job id onto the queue.
@@ -68,6 +69,7 @@ def enqueue_ingestion_job(
         "filename": filename,
         "file_type": file_type,
         "source_url": source_url,
+        "language": language,
     }
 
     pipe = r.pipeline()

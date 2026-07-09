@@ -66,6 +66,7 @@ async def process_job(job: dict) -> None:
                 document=document,
                 file_bytes=file_bytes,
                 file_type=meta["file_type"],
+                language=meta.get("language"),
             )
             document.status = "ready"
             document.error_message = None

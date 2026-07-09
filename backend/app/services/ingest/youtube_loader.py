@@ -3,11 +3,12 @@
 Strategy: try official captions first (youtube-transcript-api, no media download).
 Fallback: download audio with yt-dlp and run offline Whisper (audio_loader)."""
 from __future__ import annotations
-from typing import List
+from typing import List, Optional
 import os
 import re
 import tempfile
 from .base import ExtractedBlock, block
+from ..transcription_language import caption_language_preferences, normalize_transcription_language
 
 _YT_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})")
 
@@ -19,19 +20,21 @@ def _video_id(url: str) -> str:
     return m.group(1)
 
 
-def load_youtube(url: str) -> List[ExtractedBlock]:
+def load_youtube(url: str, language: Optional[str] = None) -> List[ExtractedBlock]:
     vid = _video_id(url)
+    normalized_language = normalize_transcription_language(language)
 
     # 1) Captions (fast, no download)
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
 
+        preferences = caption_language_preferences(normalized_language)
         if hasattr(YouTubeTranscriptApi, "get_transcript"):
-            entries = YouTubeTranscriptApi.get_transcript(vid)
+            entries = YouTubeTranscriptApi.get_transcript(vid, languages=preferences)
         else:
             transcript = YouTubeTranscriptApi().fetch(
                 vid,
-                languages=("en", "en-US", "en-GB"),
+                languages=preferences,
                 preserve_formatting=False,
             )
             entries = transcript.to_raw_data()
@@ -69,4 +72,4 @@ def load_youtube(url: str) -> List[ExtractedBlock]:
         produced = next((os.path.join(tmp, f) for f in os.listdir(tmp)), "")
         if not produced:
             raise ValueError("No audio file was downloaded for transcription.")
-        return transcribe_audio(produced)
+        return transcribe_audio(produced, language=normalized_language)

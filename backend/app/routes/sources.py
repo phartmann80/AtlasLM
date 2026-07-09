@@ -24,6 +24,7 @@ router = APIRouter(prefix="/api/sources", tags=["sources"])
 class UrlSource(BaseModel):
     notebook_id: str
     url: str
+    language: str | None = None
 
 
 async def _persist(notebook_id: str, filename: str, kind: str, blocks, user, db: Session) -> dict:
@@ -45,6 +46,7 @@ async def _persist(notebook_id: str, filename: str, kind: str, blocks, user, db:
 @router.post("/upload")
 async def upload_source(
     notebook_id: str = Form(...),
+    language: str | None = Form(None),
     file: UploadFile = File(...),
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -60,7 +62,7 @@ async def upload_source(
         if kind == "pdf":
             raise HTTPException(status_code=409,
                 detail="PDFs are handled by the existing ingestion route.")
-        blocks = extract_blocks(kind, tmp_path)
+        blocks = extract_blocks(kind, tmp_path, language=language)
         if not blocks:
             raise HTTPException(status_code=422,
                 detail="AtlasLM could not extract readable content from this source.")
@@ -86,7 +88,7 @@ async def add_url_source(
         if kind == "web":
             raise HTTPException(status_code=409,
                 detail="Plain web URLs are handled by the existing crawler route.")
-        blocks = extract_blocks(kind, body.url)
+        blocks = extract_blocks(kind, body.url, language=body.language)
         if not blocks:
             raise HTTPException(status_code=422,
                 detail="AtlasLM could not retrieve a transcript for this URL.")

@@ -237,7 +237,7 @@ class DocumentPipeline:
             pages.append(page)
         return pages
 
-    def _parse_media_file(self, file_bytes, file_type, filename):
+    def _parse_media_file(self, file_bytes, file_type, filename, language=None):
         suffix = os.path.splitext(filename or "")[1]
         if not suffix:
             suffix = ".wav" if file_type == "audio" else ".png"
@@ -249,7 +249,9 @@ class DocumentPipeline:
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 tmp.write(file_bytes)
                 tmp_path = tmp.name
-            return self._blocks_to_pages(extract_blocks(file_type, tmp_path))
+            return self._blocks_to_pages(
+                extract_blocks(file_type, tmp_path, language=language)
+            )
         finally:
             if tmp_path:
                 try:
@@ -257,7 +259,7 @@ class DocumentPipeline:
                 except OSError:
                     pass
 
-    def _parse(self, file_bytes, file_type, filename, source_url=None):
+    def _parse(self, file_bytes, file_type, filename, source_url=None, language=None):
         ft = file_type.lower()
         if ft == "pdf":
             return self.extract_text_from_pdf(file_bytes, filename)
@@ -311,7 +313,7 @@ class DocumentPipeline:
                 })
             return sections
         elif ft in ("audio", "image"):
-            return self._parse_media_file(file_bytes, ft, filename)
+            return self._parse_media_file(file_bytes, ft, filename, language=language)
         else:
             return self.extract_text_from_txt_or_md(file_bytes, filename)
 
@@ -338,14 +340,20 @@ class DocumentPipeline:
         self.db.refresh(document)
         return document
 
-    async def run_ingestion_for_document(self, document, file_bytes, file_type):
+    async def run_ingestion_for_document(self, document, file_bytes, file_type, language=None):
         import uuid as _uuid
         from ..models import DocumentChunk
         from ..core.providers import provider_registry
 
         logger.info("Worker ingestion start: '%s' (doc %s)", document.filename, document.id)
 
-        pages_data = self._parse(file_bytes, file_type, document.filename, source_url=getattr(document, "source_url", None))
+        pages_data = self._parse(
+            file_bytes,
+            file_type,
+            document.filename,
+            source_url=getattr(document, "source_url", None),
+            language=language,
+        )
 
         chunks_data = self.recursive_chunk_text(pages_data)
         if not chunks_data:
@@ -398,6 +406,7 @@ class DocumentPipeline:
         file_type: str,  # 'pdf', 'txt', 'md', 'url'
         source_url: Optional[str] = None,
         provider_name: Optional[str] = None,
+        language: Optional[str] = None,
         chunk_size: int = 800,
         chunk_overlap: int = 150,
     ) -> Document:
@@ -405,7 +414,13 @@ class DocumentPipeline:
             "Ingesting '%s' into workspace %s", filename, workspace_id
         )
 
-        pages_data = self._parse(file_bytes, file_type, filename, source_url=source_url)
+        pages_data = self._parse(
+            file_bytes,
+            file_type,
+            filename,
+            source_url=source_url,
+            language=language,
+        )
 
         # 2. Chunk
         chunks_data = self.recursive_chunk_text(

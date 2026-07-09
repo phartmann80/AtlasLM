@@ -3,6 +3,22 @@
 import React, { useState, useRef } from "react";
 import { apiClient } from "@/lib/apiClient";
 
+const TRANSCRIPTION_LANGUAGES = [
+  { value: "auto", label: "Auto detect" },
+  { value: "en", label: "English" },
+  { value: "de", label: "German" },
+  { value: "es", label: "Spanish" },
+  { value: "fr", label: "French" },
+  { value: "pt", label: "Portuguese" },
+  { value: "it", label: "Italian" },
+  { value: "nl", label: "Dutch" },
+  { value: "ar", label: "Arabic" },
+  { value: "hi", label: "Hindi" },
+  { value: "ja", label: "Japanese" },
+  { value: "ko", label: "Korean" },
+  { value: "zh", label: "Chinese" },
+];
+
 export default function AddSourceModal({
   notebookId,
   token,
@@ -14,15 +30,17 @@ export default function AddSourceModal({
   onClose: () => void;
   onAdded?: (result: any) => void;
 }) {
-  const [active, setActive] = useState<"link" | "website" | "youtube" | "paste" | null>(null);
+  const [active, setActive] = useState<"link" | "website" | "youtube" | "audio" | "paste" | null>(null);
   const [url, setUrl] = useState("");
   const [pasteTitle, setPasteTitle] = useState("");
   const [pasteContent, setPasteContent] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [transcriptionLanguage, setTranscriptionLanguage] = useState("auto");
 
   const [acceptTypes, setAcceptTypes] = useState("");
+  const [selectedFileType, setSelectedFileType] = useState<"pdf" | "docx" | "xlsx" | "pptx" | "audio" | "image" | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function cleanErrorMessage(error: any): string {
@@ -58,6 +76,7 @@ export default function AddSourceModal({
   }
 
   function handleFileClick(type: "pdf" | "docx" | "xlsx" | "pptx" | "audio" | "image") {
+    setSelectedFileType(type);
     if (type === "pdf") {
       setAcceptTypes(".pdf");
     } else if (type === "docx") {
@@ -85,6 +104,9 @@ export default function AddSourceModal({
     try {
       const fd = new FormData();
       fd.append("file", file);
+      if (selectedFileType === "audio") {
+        fd.append("language", transcriptionLanguage);
+      }
       const res = await apiClient.postForm<any>(`/api/v1/workspaces/${notebookId}/documents`, fd);
       onAdded?.(res);
       onClose();
@@ -116,7 +138,10 @@ export default function AddSourceModal({
     setBusy(true);
     setErr(null);
     try {
-      const res = await apiClient.post<any>(`/api/v1/workspaces/${notebookId}/documents/youtube`, { url: normalizeUrlInput(url) });
+      const res = await apiClient.post<any>(`/api/v1/workspaces/${notebookId}/documents/youtube`, {
+        url: normalizeUrlInput(url),
+        language: transcriptionLanguage,
+      });
       onAdded?.(res);
       onClose();
     } catch (error: any) {
@@ -132,10 +157,14 @@ export default function AddSourceModal({
     setErr(null);
     const normalized = normalizeUrlInput(rawUrl);
     try {
-      const path = isYouTubeUrl(normalized)
+      const youtubeLink = isYouTubeUrl(normalized);
+      const path = youtubeLink
         ? `/api/v1/workspaces/${notebookId}/documents/youtube`
         : `/api/v1/workspaces/${notebookId}/documents/url`;
-      const res = await apiClient.post<any>(path, { url: normalized });
+      const body = youtubeLink
+        ? { url: normalized, language: transcriptionLanguage }
+        : { url: normalized };
+      const res = await apiClient.post<any>(path, body);
       onAdded?.(res);
       onClose();
     } catch (error: any) {
@@ -165,6 +194,26 @@ export default function AddSourceModal({
     } finally {
       setBusy(false);
     }
+  }
+
+  function renderLanguageSelect(label = "Transcription language") {
+    return (
+      <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-400">
+        <span>{label}</span>
+        <select
+          value={transcriptionLanguage}
+          onChange={(e) => setTranscriptionLanguage(e.target.value)}
+          disabled={busy}
+          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 transition-colors"
+        >
+          {TRANSCRIPTION_LANGUAGES.map((language) => (
+            <option key={language.value} value={language.value}>
+              {language.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
   }
 
   return (
@@ -333,7 +382,7 @@ export default function AddSourceModal({
                   </div>
                 </button>
 
-                <button className="src-row" onClick={() => handleFileClick("audio")}>
+                <button className="src-row" onClick={() => { setActive("audio"); setErr(null); }}>
                   <div className="src-ic">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
@@ -386,6 +435,7 @@ export default function AddSourceModal({
                       className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 transition-colors"
                       disabled={busy}
                     />
+                    {renderLanguageSelect("Video transcription language")}
                     <button
                       disabled={busy || !url.trim()}
                       onClick={handleLinkSubmit}
@@ -437,12 +487,30 @@ export default function AddSourceModal({
                       className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 transition-colors"
                       disabled={busy}
                     />
+                    {renderLanguageSelect("Caption or transcription language")}
                     <button
                       disabled={busy || !url.trim()}
                       onClick={handleYoutubeSubmit}
                       className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold py-3 rounded-lg text-xs tracking-wider uppercase transition-colors"
                     >
                       {busy ? "Transcribing..." : "Transcribe video"}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {active === "audio" && (
+                <>
+                  <h2>Ingest Audio</h2>
+                  <p className="sub">Upload MP3, WAV, M4A, AAC, OGG, or FLAC. AtlasLM transcribes it on the backend and indexes timestamped notes as a citable source.</p>
+                  <div className="mt-4 flex flex-col gap-3">
+                    {renderLanguageSelect()}
+                    <button
+                      disabled={busy}
+                      onClick={() => handleFileClick("audio")}
+                      className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold py-3 rounded-lg text-xs tracking-wider uppercase transition-colors"
+                    >
+                      Choose audio file
                     </button>
                   </div>
                 </>

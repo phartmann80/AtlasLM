@@ -3,9 +3,10 @@
 Requires faster-whisper + ffmpeg installed in the container.
 Model size is configurable via env ATLAS_WHISPER_MODEL (default 'base')."""
 from __future__ import annotations
-from typing import List
+from typing import List, Optional
 import os
 from .base import ExtractedBlock, block
+from ..transcription_language import normalize_transcription_language
 
 _MODEL = None
 
@@ -21,9 +22,13 @@ def _get_model():
     return _MODEL
 
 
-def transcribe_audio(path: str) -> List[ExtractedBlock]:
+def transcribe_audio(path: str, language: Optional[str] = None) -> List[ExtractedBlock]:
     model = _get_model()
-    segments, _info = model.transcribe(path, beam_size=1)
+    normalized_language = normalize_transcription_language(language)
+    options = {"beam_size": 1}
+    if normalized_language:
+        options["language"] = normalized_language
+    segments, _info = model.transcribe(path, **options)
     blocks: List[ExtractedBlock] = []
     for seg in segments:
         t = (seg.text or "").strip()
