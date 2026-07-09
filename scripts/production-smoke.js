@@ -24,6 +24,7 @@ const DEFAULT_YOUTUBE_URLS = [
   "https://youtu.be/RL_PDX_BVxw?si=n677CYk09fqLTNie",
   "https://youtu.be/QQEgIo4Juxg?si=oZdiZYQisWzsd-Ht",
 ];
+const STUDIO_OUTPUT_TYPES = ["study_guide", "mind_map", "quiz", "flashcards"];
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
@@ -129,6 +130,30 @@ async function jsonFetch(url, options = {}) {
 
 function check(results, name, passed, detail = "") {
   results.checks.push({ name, passed: Boolean(passed), detail });
+}
+
+function studioContentReady(outputType, content) {
+  if (!content || typeof content !== "object") return false;
+  if (outputType === "study_guide") {
+    return Array.isArray(content.sections) && content.sections.length > 0;
+  }
+  if (outputType === "mind_map") {
+    return typeof content.root === "string" && content.root.trim() && Array.isArray(content.branches) && content.branches.length > 0;
+  }
+  if (outputType === "quiz") {
+    return Array.isArray(content.questions) && content.questions.some((question) => (
+      typeof question.question === "string" &&
+      Array.isArray(question.choices) &&
+      question.choices.length === 4 &&
+      Number.isInteger(Number(question.answer_index))
+    ));
+  }
+  if (outputType === "flashcards") {
+    return Array.isArray(content.cards) && content.cards.some((card) => (
+      typeof card.front === "string" && typeof card.back === "string"
+    ));
+  }
+  return false;
 }
 
 async function createTempUser(env) {
@@ -300,13 +325,20 @@ async function main() {
     check(results, "chat.grounded.no_error", chatRes.ok && !chatText.includes("event: error"), chatText.slice(0, 160).replace(/\s+/g, " "));
     check(results, "chat.grounded.answer", /Atlas Orion/i.test(chatText) && /KLAW Labs/i.test(chatText));
 
-    const studio = await jsonFetch(`${BASE_URL}/api/v1/workspaces/${workspace.id}/studio`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ output_type: "study_guide" }),
-    });
-    const finalStudio = await pollStudio(headers, workspace.id, studio.id, 120000);
-    check(results, "studio.study_guide.ready", finalStudio?.status === "ready" && Boolean(finalStudio?.content), finalStudio?.error || finalStudio?.status || "missing");
+    for (const outputType of STUDIO_OUTPUT_TYPES) {
+      const studio = await jsonFetch(`${BASE_URL}/api/v1/workspaces/${workspace.id}/studio`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ output_type: outputType }),
+      });
+      const finalStudio = await pollStudio(headers, workspace.id, studio.id, 120000);
+      check(
+        results,
+        `studio.${outputType}.ready`,
+        finalStudio?.status === "ready" && studioContentReady(outputType, finalStudio?.content),
+        finalStudio?.error || finalStudio?.status || "missing",
+      );
+    }
 
     const audioRes = await fetch(`${BASE_URL}/api/v1/workspaces/${workspace.id}/audio/generate`, {
       method: "POST",

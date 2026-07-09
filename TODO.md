@@ -19,14 +19,13 @@ Last updated: 2026-07-09
 - [x] Image source ingestion with visual fallback.
 - [x] YouTube ingestion for the two reported videos.
 - [x] Source-grounded chat.
-- [x] Studio study guide generation.
+- [x] Studio study guide, mind map, quiz, and flashcard generation.
 - [x] Audio Overview generation and playback.
 
 ## Next Engineering Queue
 
-- [ ] Extend `scripts/production-smoke.js` coverage to Studio mind map, quiz, and flashcards.
-- [ ] Fix any failing Studio output type.
 - [ ] Add scanned PDF OCR fallback.
+- [ ] Add scanned PDF OCR coverage to `scripts/production-smoke.js`.
 - [ ] Add transcription language selection for audio and video sources.
 - [ ] Add generic media link ingestion for social video URLs where feasible.
 - [ ] Replace Agent tab with real executable agent workflows.

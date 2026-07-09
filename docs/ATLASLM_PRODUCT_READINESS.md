@@ -19,6 +19,7 @@ Production backend:
 Latest production smoke:
 
 - 2026-07-09: `node scripts/production-smoke.js` passed all checks against `https://www.atlaslm.cloud`.
+- 2026-07-09: Studio smoke coverage was expanded and passed for study guide, mind map, quiz, and flashcards.
 
 ## Real And Verified
 
@@ -31,7 +32,7 @@ These paths have production smoke coverage:
 - Image ingestion through OCR, with visual AI fallback when OCR finds no text.
 - YouTube ingestion for the two reported test videos.
 - Source-grounded chat over ready sources.
-- Studio study guide generation.
+- Studio study guide, mind map, quiz, and flashcard generation.
 - Audio Overview generation and playback through an authenticated WAV stream.
 
 Run:
@@ -87,13 +88,9 @@ node scripts/production-smoke.js
 
 ## Next Highest-Priority Task
 
-Add production smoke coverage for all remaining Studio outputs and then fix any failing output type:
+Add scanned PDF OCR fallback so image-only PDFs can become usable sources instead of failed files.
 
-- Mind map
-- Quiz
-- Flashcards
-
-Reason: Studio is a core user promise, it feeds Android later, and it is already part of the visible dashboard.
+Reason: PDF ingestion is a core user promise, scanned PDFs are common research material, and Android users will expect uploaded scans to work.
 
 ## Operating Loop
 
