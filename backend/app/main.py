@@ -1,4 +1,5 @@
 import logging
+import os
 # Suppress httpx request logger to prevent provider URL leaks in logs (T11)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -14,6 +15,9 @@ from .middleware.auth_middleware import AuthMiddleware
 from .stripe_webhook import router as stripe_router
 
 logger = logging.getLogger(__name__)
+
+database_ready = False
+database_error: str | None = None
 
 try:
     # Enable pgvector BEFORE SQLAlchemy creates VECTOR columns.
@@ -32,9 +36,12 @@ try:
 
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables initialized successfully (pgvector vector enabled).")
+    database_ready = True
 except Exception as e:
-    logger.exception(f"FATAL: Could not connect to database / enable pgvector / create tables: {e}")
-    raise
+    database_error = str(e)
+    logger.exception(f"Could not connect to database / enable pgvector / create tables: {e}")
+    if not os.getenv("VERCEL"):
+        raise
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -77,7 +84,13 @@ def read_root():
 
 @app.get("/health", tags=["system"])
 async def health_check():
-    return {"status": "healthy"}
+    if database_ready:
+        return {"status": "healthy", "database": "ready"}
+    return {
+        "status": "degraded",
+        "database": "unavailable",
+        "detail": "DATABASE_URL must point to a managed Postgres database with pgvector enabled.",
+    }
 
 
 if __name__ == "__main__":

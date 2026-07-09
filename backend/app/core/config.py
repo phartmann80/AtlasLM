@@ -66,6 +66,7 @@ class Settings(BaseSettings):
 
     class Config:
         case_sensitive = True
-        env_file = ".env"
+        env_file = None if os.getenv("VERCEL") else ".env"
+        extra = "ignore"
 
 settings = Settings()
