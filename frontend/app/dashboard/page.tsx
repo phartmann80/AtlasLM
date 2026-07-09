@@ -179,6 +179,7 @@ export default function Dashboard() {
   const streamingAccumRef = useRef("");
   const citationsMapRef = useRef<Record<string, any>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const creatingWorkspaceRef = useRef<Promise<Workspace | null> | null>(null);
 
   const readySources = useMemo(
     () => sources.filter((source) => source.status === "ready"),
@@ -216,9 +217,32 @@ export default function Dashboard() {
     return fallback;
   };
 
+  const createWorkspace = useCallback(async (name: string): Promise<Workspace> => {
+    const workspace = await apiClient.post<Workspace>("/api/v1/workspaces", { name });
+    setWorkspaces((prev) => {
+      if (prev.some((item) => item.id === workspace.id)) return prev;
+      return [workspace, ...prev];
+    });
+    setSelectedWorkspace(workspace);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("selectedWorkspaceId", workspace.id);
+    }
+    setUiError("");
+    return workspace;
+  }, []);
+
   const fetchWorkspaces = useCallback(async () => {
     try {
       const data = await apiClient.get<Workspace[]>("/api/v1/workspaces");
+      if (data.length === 0) {
+        if (!creatingWorkspaceRef.current) {
+          creatingWorkspaceRef.current = createWorkspace("My first notebook").finally(() => {
+            creatingWorkspaceRef.current = null;
+          });
+        }
+        await creatingWorkspaceRef.current;
+        return;
+      }
       setWorkspaces(data);
       const savedWorkspaceId = typeof window !== "undefined" ? localStorage.getItem("selectedWorkspaceId") : null;
       const restored = data.find((workspace) => workspace.id === savedWorkspaceId) || data[0] || null;
@@ -227,7 +251,7 @@ export default function Dashboard() {
     } catch (err) {
       setUiError(getErrorMessage(err, "Could not load notebooks."));
     }
-  }, []);
+  }, [createWorkspace]);
 
   const fetchDocuments = useCallback(async (workspaceId: string) => {
     try {
@@ -263,6 +287,7 @@ export default function Dashboard() {
     });
     setSessions((prev) => [session, ...prev]);
     setSelectedSessionId(session.id);
+    return session;
   }, []);
 
   const fetchSessions = useCallback(async (workspaceId: string) => {
@@ -363,15 +388,69 @@ export default function Dashboard() {
     const name = newWorkspaceName.trim();
     if (!name) return;
     try {
-      const workspace = await apiClient.post<Workspace>("/api/v1/workspaces", { name });
-      setWorkspaces((prev) => [workspace, ...prev]);
-      setSelectedWorkspace(workspace);
+      await createWorkspace(name);
       setNewWorkspaceName("");
-      setUiError("");
     } catch (err) {
       setUiError(getErrorMessage(err, "Could not create notebook."));
     }
   };
+
+  const ensureWorkspace = useCallback(async (): Promise<Workspace | null> => {
+    if (selectedWorkspace) return selectedWorkspace;
+    if (workspaces[0]) {
+      setSelectedWorkspace(workspaces[0]);
+      return workspaces[0];
+    }
+    if (!creatingWorkspaceRef.current) {
+      creatingWorkspaceRef.current = createWorkspace("My first notebook").finally(() => {
+        creatingWorkspaceRef.current = null;
+      });
+    }
+    try {
+      return await creatingWorkspaceRef.current;
+    } catch (err) {
+      setUiError(getErrorMessage(err, "Could not create notebook."));
+      return null;
+    }
+  }, [createWorkspace, selectedWorkspace, workspaces]);
+
+  const ensureChatSession = useCallback(async (): Promise<string | null> => {
+    const workspace = await ensureWorkspace();
+    if (!workspace) return null;
+    if (selectedSessionId) return selectedSessionId;
+    const existing = sessions.find((session) => session.workspace_id === workspace.id);
+    if (existing) {
+      setSelectedSessionId(existing.id);
+      return existing.id;
+    }
+    try {
+      const session = await handleCreateSession(workspace.id);
+      return session.id;
+    } catch (err) {
+      setUiError(getErrorMessage(err, "Could not start Atlas AI."));
+      return null;
+    }
+  }, [ensureWorkspace, handleCreateSession, selectedSessionId, sessions]);
+
+  const openAddSource = useCallback(async () => {
+    const workspace = await ensureWorkspace();
+    if (workspace) setShowAddSource(true);
+  }, [ensureWorkspace]);
+
+  const openDeepResearch = useCallback(async () => {
+    const workspace = await ensureWorkspace();
+    if (workspace) setDeepResearchOpen(true);
+  }, [ensureWorkspace]);
+
+  const openNotes = useCallback(async () => {
+    const workspace = await ensureWorkspace();
+    if (workspace) setView("notes");
+  }, [ensureWorkspace]);
+
+  const openCanvas = useCallback(async () => {
+    const workspace = await ensureWorkspace();
+    if (workspace) setView("canvas");
+  }, [ensureWorkspace]);
 
   const handleDeleteDocument = async (documentId: string) => {
     try {
@@ -383,14 +462,16 @@ export default function Dashboard() {
   };
 
   const handleSaveNotesAsSource = async () => {
-    if (!selectedWorkspace || !notes.trim()) return;
+    if (!notes.trim()) return;
+    const workspace = await ensureWorkspace();
+    if (!workspace) return;
     setNotesSaving(true);
     try {
-      await apiClient.post(`/api/v1/workspaces/${selectedWorkspace.id}/documents/text`, {
+      await apiClient.post(`/api/v1/workspaces/${workspace.id}/documents/text`, {
         title: `Notebook notes - ${new Date().toLocaleDateString()}`,
         content: notes.trim(),
       });
-      await fetchDocuments(selectedWorkspace.id);
+      await fetchDocuments(workspace.id);
       setUiError("");
     } catch (err) {
       setUiError(getErrorMessage(err, "Could not add notes as a source."));
@@ -402,7 +483,9 @@ export default function Dashboard() {
   const handleSendChatMessage = async (event?: React.FormEvent, promptOverride?: string) => {
     event?.preventDefault();
     const query = (promptOverride || chatInput).trim();
-    if (!query || !selectedSessionId || chatLoading) return;
+    if (!query || chatLoading) return;
+    const sessionId = await ensureChatSession();
+    if (!sessionId) return;
 
     setChatInput("");
     setChatLoading(true);
@@ -420,7 +503,7 @@ export default function Dashboard() {
     ]);
 
     try {
-      const response = await apiClient.stream(`/api/v1/sessions/${selectedSessionId}/chat/stream`, {
+      const response = await apiClient.stream(`/api/v1/sessions/${sessionId}/chat/stream`, {
         content: query,
         synthesis_node_id: activeScopeNode?.id || null,
       });
@@ -506,15 +589,16 @@ export default function Dashboard() {
   };
 
   const generateStudioOutput = async (outputType: StudioOutput["output_type"]) => {
-    if (!selectedWorkspace) return;
+    const workspace = await ensureWorkspace();
+    if (!workspace) return;
     if (readySources.length === 0) {
       setUiError("Add a source first, then AtlasLM can generate cited outputs.");
-      setShowAddSource(true);
+      await openAddSource();
       return;
     }
 
     try {
-      const response = await apiClient.postRaw(`/api/v1/workspaces/${selectedWorkspace.id}/studio`, {
+      const response = await apiClient.postRaw(`/api/v1/workspaces/${workspace.id}/studio`, {
         output_type: outputType,
         synthesis_node_id: activeScopeNode?.id || null,
       });
@@ -526,7 +610,7 @@ export default function Dashboard() {
       setStudioOutputs((prev) => [body, ...prev]);
       setOpenOutput(body);
       setView("studio");
-      pollStudioOutput(body.id, selectedWorkspace.id);
+      pollStudioOutput(body.id, workspace.id);
       setUiError("");
     } catch (err) {
       setUiError(getErrorMessage(err, "Could not generate this output."));
@@ -715,9 +799,8 @@ export default function Dashboard() {
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               <button
                 type="button"
-                onClick={() => setShowAddSource(true)}
-                disabled={!selectedWorkspace}
-                className="rounded border border-zinc-700 bg-zinc-100 p-4 text-left text-zinc-950 hover:bg-white disabled:opacity-40"
+                onClick={openAddSource}
+                className="rounded border border-zinc-700 bg-zinc-100 p-4 text-left text-zinc-950 hover:bg-white"
               >
                 <Upload className="h-5 w-5" />
                 <div className="mt-3 text-sm font-semibold">Add files or links</div>
@@ -725,9 +808,8 @@ export default function Dashboard() {
               </button>
               <button
                 type="button"
-                onClick={() => setDeepResearchOpen(true)}
-                disabled={!selectedWorkspace}
-                className="rounded border border-sky-400/20 bg-sky-400/10 p-4 text-left text-sky-100 hover:bg-sky-400/15 disabled:opacity-40"
+                onClick={openDeepResearch}
+                className="rounded border border-sky-400/20 bg-sky-400/10 p-4 text-left text-sky-100 hover:bg-sky-400/15"
               >
                 <Search className="h-5 w-5" />
                 <div className="mt-3 text-sm font-semibold text-white">Discover sources</div>
@@ -735,9 +817,8 @@ export default function Dashboard() {
               </button>
               <button
                 type="button"
-                onClick={() => setView("notes")}
-                disabled={!selectedWorkspace}
-                className="rounded border border-violet-400/20 bg-violet-400/10 p-4 text-left text-violet-100 hover:bg-violet-400/15 disabled:opacity-40"
+                onClick={openNotes}
+                className="rounded border border-violet-400/20 bg-violet-400/10 p-4 text-left text-violet-100 hover:bg-violet-400/15"
               >
                 <BookOpen className="h-5 w-5" />
                 <div className="mt-3 text-sm font-semibold text-white">Start with notes</div>
@@ -819,7 +900,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setShowAddSource(true)}
+              onClick={openAddSource}
               className="flex h-9 items-center gap-2 rounded bg-zinc-100 px-3 text-sm font-semibold text-zinc-950 hover:bg-white"
             >
               <Upload className="h-4 w-4" />
@@ -856,7 +937,7 @@ export default function Dashboard() {
                 <div className="mt-6 flex flex-wrap justify-center gap-3">
                   <button
                     type="button"
-                    onClick={() => setShowAddSource(true)}
+                    onClick={openAddSource}
                     className="flex h-10 items-center gap-2 rounded bg-zinc-100 px-4 text-sm font-semibold text-zinc-950 hover:bg-white"
                   >
                     <Upload className="h-4 w-4" />
@@ -864,7 +945,7 @@ export default function Dashboard() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setDeepResearchOpen(true)}
+                    onClick={openDeepResearch}
                     className="flex h-10 items-center gap-2 rounded border border-sky-400/20 bg-sky-400/10 px-4 text-sm font-semibold text-sky-100 hover:bg-sky-400/15"
                   >
                     <Search className="h-4 w-4" />
@@ -1013,7 +1094,17 @@ export default function Dashboard() {
   const viewButton = (id: DashboardView, label: string, Icon: typeof MessageSquare) => (
     <button
       type="button"
-      onClick={() => setView(id)}
+      onClick={() => {
+        if (id === "notes") {
+          void openNotes();
+          return;
+        }
+        if (id === "canvas") {
+          void openCanvas();
+          return;
+        }
+        setView(id);
+      }}
       className={`flex h-9 items-center gap-2 rounded px-3 text-sm font-medium transition ${
         view === id
           ? "bg-zinc-100 text-zinc-950"
@@ -1047,7 +1138,7 @@ export default function Dashboard() {
           </div>
           <button
             type="button"
-            onClick={() => setDeepResearchOpen(true)}
+            onClick={openDeepResearch}
             className="hidden h-9 items-center gap-2 rounded border border-emerald-400/20 bg-emerald-400/10 px-3 text-sm font-medium text-emerald-100 hover:bg-emerald-400/15 md:flex"
           >
             <Sparkles className="h-4 w-4" />
@@ -1106,9 +1197,8 @@ export default function Dashboard() {
               <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Sources</span>
               <button
                 type="button"
-                onClick={() => setShowAddSource(true)}
-                disabled={!selectedWorkspace}
-                className="flex h-8 items-center gap-2 rounded bg-zinc-100 px-2.5 text-xs font-semibold text-zinc-950 hover:bg-white disabled:opacity-40"
+                onClick={openAddSource}
+                className="flex h-8 items-center gap-2 rounded bg-zinc-100 px-2.5 text-xs font-semibold text-zinc-950 hover:bg-white"
               >
                 <Upload className="h-3.5 w-3.5" />
                 Add
@@ -1148,9 +1238,8 @@ export default function Dashboard() {
                   <p className="mt-1 text-xs leading-5">Add a document, URL, YouTube video, or note to wake up this notebook.</p>
                   <button
                     type="button"
-                    onClick={() => setShowAddSource(true)}
-                    disabled={!selectedWorkspace}
-                    className="mt-4 flex h-8 items-center gap-2 rounded bg-zinc-100 px-3 text-xs font-semibold text-zinc-950 hover:bg-white disabled:opacity-40"
+                    onClick={openAddSource}
+                    className="mt-4 flex h-8 items-center gap-2 rounded bg-zinc-100 px-3 text-xs font-semibold text-zinc-950 hover:bg-white"
                   >
                     <Upload className="h-3.5 w-3.5" />
                     Add source
@@ -1283,13 +1372,13 @@ export default function Dashboard() {
                     <input
                       value={chatInput}
                       onChange={(event) => setChatInput(event.target.value)}
-                      disabled={chatLoading || !selectedSessionId}
+                      disabled={chatLoading}
                       placeholder={readySources.length === 0 ? "Say hi, or add sources for grounded questions" : "Ask Atlas AI a cited question"}
                       className="h-12 min-w-0 flex-1 rounded border border-zinc-800 bg-[#090a0d] px-4 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600 disabled:opacity-50"
                     />
                     <button
                       type="submit"
-                      disabled={chatLoading || !chatInput.trim() || !selectedSessionId}
+                      disabled={chatLoading || !chatInput.trim()}
                       className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-emerald-300 text-zinc-950 hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
                       title="Send"
                     >
@@ -1316,7 +1405,7 @@ export default function Dashboard() {
                 <button
                   type="button"
                   onClick={handleSaveNotesAsSource}
-                  disabled={!notes.trim() || notesSaving || !selectedWorkspace}
+                  disabled={!notes.trim() || notesSaving}
                   className="flex h-10 items-center gap-2 rounded bg-zinc-100 px-3 text-sm font-semibold text-zinc-950 hover:bg-white disabled:opacity-40"
                 >
                   {notesSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
@@ -1422,7 +1511,7 @@ export default function Dashboard() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDeepResearchOpen(true)}
+                  onClick={openDeepResearch}
                   className="rounded border border-sky-400/20 bg-sky-400/10 p-5 text-left hover:bg-sky-400/15"
                 >
                   <Search className="h-5 w-5 text-sky-200" />
@@ -1508,7 +1597,7 @@ export default function Dashboard() {
             <div className="mt-3 space-y-2">
               <button
                 type="button"
-                onClick={() => setDeepResearchOpen(true)}
+                onClick={openDeepResearch}
                 className="flex w-full items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
               >
                 <span className="flex items-center gap-2"><Search className="h-4 w-4" /> Discover sources</span>
@@ -1516,7 +1605,7 @@ export default function Dashboard() {
               </button>
               <button
                 type="button"
-                onClick={() => setView("notes")}
+                onClick={openNotes}
                 className="flex w-full items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
               >
                 <span className="flex items-center gap-2"><BookOpen className="h-4 w-4" /> Open notes</span>
@@ -1524,7 +1613,7 @@ export default function Dashboard() {
               </button>
               <button
                 type="button"
-                onClick={() => setView("canvas")}
+                onClick={openCanvas}
                 className="flex w-full items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
               >
                 <span className="flex items-center gap-2"><Map className="h-4 w-4" /> Map sources</span>
