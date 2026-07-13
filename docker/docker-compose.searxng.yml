@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080/
-      - SEARXNG_SECRET=${SEARXNG_SECRET:-change-me-in-env}
+      - SEARXNG_SECRET=${SEARXNG_SECRET:?SEARXNG_SECRET must be set}
     volumes:
       - ./searxng:/etc/searxng:rw
     # No host port needed - backend reaches it on the internal network as

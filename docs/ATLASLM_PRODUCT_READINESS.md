@@ -1,108 +1,88 @@
-# AtlasLM Product Readiness
+# AtlasLM product readiness
 
-Last updated: 2026-07-09
+Last updated: 2026-07-11
 
-## Goal
+Candidate release: `atlaslm-mastra-report-candidate-2026-07-11`
 
-AtlasLM must become a real source-grounded research app, then an Android app that uses the same backend API. The web app is the reference client. The backend must be reliable enough that Android can reuse auth, notebooks, source ingestion, chat, Studio outputs, and audio playback without special-case hacks.
+Source base commit: `d9b7eedb121e730fb1f9d4f0f535ed0cd97a0a2f`
 
-## Current Production Reality
+Release state: not deployed to the public backend hostname and not approved for Vercel Production redirection.
 
-Production frontend:
+## Candidate release scope
 
-- `https://www.atlaslm.cloud`
+The approved scope for the current candidate is intentionally narrow:
 
-Production backend:
-
-- Server-hosted FastAPI backend behind the Vercel API proxy.
-
-Latest production smoke:
-
-- 2026-07-09: `node scripts/production-smoke.js` passed all checks against `https://www.atlaslm.cloud`.
-- 2026-07-09: Studio smoke coverage was expanded and passed for study guide, mind map, quiz, and flashcards.
-- 2026-07-09: Scanned PDF OCR fallback was added, deployed, and verified with an image-only PDF upload in production smoke.
-- 2026-07-09: Transcription language selection was added for YouTube and audio uploads. YouTube `language: "en"` ingestion passed production smoke; audio language pass-through was verified in the deployed backend container.
-
-## Real And Verified
-
-These paths have production smoke coverage:
-
-- Supabase authenticated API calls.
-- Notebook/workspace creation.
-- Pasted text and notebook notes as ready sources.
-- Website ingestion for visible page text.
-- Image ingestion through OCR, with visual AI fallback when OCR finds no text.
-- Scanned/image-only PDF ingestion through OCR fallback.
-- YouTube ingestion for the two reported test videos, including explicit language selection.
-- Source-grounded chat over ready sources.
-- Studio study guide, mind map, quiz, and flashcard generation.
-- Audio Overview generation and playback through an authenticated WAV stream.
-
-Run:
-
-```bash
-node scripts/production-smoke.js
+```text
+Notebook creation
+-> real source ingestion
+-> grounded cited chat
+-> Report generation
+-> Report persistence and reopening
 ```
 
-## Partial
+This release is not a declaration that the full AtlasLM web platform is complete. It is the first production-gated Mastra milestone for the notebook-to-Report workflow.
 
-- Audio voice quality is functional but not final. The backend now produces audible speech through a packaged fallback when neural voice models are missing. A higher-quality Voicebox-style service is still needed.
-- YouTube works through captions first and media transcription fallback. Some private, members-only, region-restricted, or blocked videos can still fail because YouTube refuses access.
-- Audio file uploads pass a selected transcription language through the API, queue, worker, and Whisper loader. Production smoke does not yet upload a spoken audio fixture by default.
-- Image ingestion can index OCR text or a visual description. It is not a full vision Q&A system yet.
-- Deep Research/source discovery exists, but it still needs a dedicated production smoke test and better empty/error states.
-- Agent tab launches real app areas, but it is not yet a full autonomous agent with task planning and deliverable execution.
+## Environment tested
 
-## Not Yet Real
+| Environment | Date | Result | Evidence location |
+| --- | --- | --- | --- |
+| Isolated backend validation stack on `212.227.44.13` | 2026-07-10 to 2026-07-11 | Passed for the notebook-to-Report vertical slice. | `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` |
+| Local/frontend candidate build | 2026-07-10 to 2026-07-11 | TypeScript, ESLint, and production build passed. | `docs/PRODUCTION_BLOCKER_STATUS_2026-07-11.md` |
+| Production DNS/TLS at `api.atlaslm.cloud` | 2026-07-11 | Blocked because DNS does not resolve. | `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` |
+| Vercel Preview connected to `https://api.atlaslm.cloud` | 2026-07-11 | Not started; waits for DNS/TLS and backend HTTPS smoke. | `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` |
+| Vercel Production | 2026-07-11 | Not redirected and not authorized for cutover. | `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` |
 
-- Generic Instagram, TikTok, LinkedIn, and arbitrary social video transcription.
-- Premium Studio HD voice.
-- Short vertical video brief generation.
-- Native Android app.
-- Invite email delivery.
-- Google/GitHub signup buttons.
+## Capability status for this candidate
 
-## Loop Phases
+| Capability | Status | Evidence location | Known limitations |
+| --- | --- | --- | --- |
+| Supabase authenticated API access | Enabled for candidate | Isolated two-user validation; `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Final HTTPS auth rejection and CORS checks still required after DNS/TLS. |
+| Notebook/workspace creation | Enabled for candidate | Isolated vertical-slice validation; `scripts/acceptance-matrix.js` | Public backend smoke still pending DNS/TLS. |
+| Real source ingestion | Enabled for candidate | Isolated vertical-slice validation; `scripts/acceptance-matrix.js` | Full source-type matrix is not re-certified for this candidate. |
+| Grounded cited chat | Enabled for candidate | Isolated vertical-slice validation; `scripts/acceptance-matrix.js` | Final citation interaction must be shown in authenticated dashboard evidence. |
+| Report generation | Enabled for candidate | Mastra-backed Report validation; `migrations/010_ai_runtime_vertical_slice.sql`; `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Only Report is enabled from Studio for this milestone. |
+| Report persistence and reopening | Enabled for candidate | Isolated vertical-slice validation; `scripts/acceptance-matrix.js` | Must be repeated through the Vercel Preview after DNS/TLS. |
+| Cross-workspace isolation | Enabled for candidate | Isolated two-user validation; `scripts/acceptance-matrix.js` | Must be repeated against deployed HTTPS candidate. |
+| Layout persistence | Enabled for candidate | Isolated validation; dashboard build checks | Authenticated viewport evidence still required. |
+| Study Guide | Legacy-only | Historical implementation and older smoke results only | Not approved as enabled for this candidate until revalidated with current API, persistence, auth, errors, and acceptance tests. |
+| Flashcards | Disabled | Dashboard disabled-state requirements; `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Must remain disabled for this release. |
+| Quiz | Disabled | Dashboard disabled-state requirements; `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Must remain disabled for this release. |
+| Mind Map | Disabled | Dashboard disabled-state requirements; `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Must remain disabled for this release. |
+| Slide Deck | Disabled | Dashboard disabled-state requirements; `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Must remain disabled for this release. |
+| Audio Overview | Disabled | Dashboard disabled-state requirements; `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Must not open an empty modal or enabled action. |
+| Video Overview | Disabled | Dashboard disabled-state requirements; `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Must remain disabled for this release. |
+| Deep Research / Research Interest Agent | Disabled | Scope gate in `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Not started for this candidate. |
+| Native Android app | Disabled | Scope gate in `docs/PRODUCTION_RELEASE_GATE_REPORT_2026-07-11.md` | Android remains gated on web stability. |
 
-1. Production truth and regression harness
-   - Status: complete for current critical paths.
-   - Smoke runner added.
-   - Product readiness notes added.
+## Historical evidence that is not candidate enablement
 
-2. Core source ingestion hardening
-   - Add generic media-link ingestion where feasible.
-   - Improve error messaging for blocked media.
-   - Continue expanding source-type smoke coverage.
+Older production smoke results from 2026-07-09 remain useful history, but they do not enable a capability in the current Mastra notebook-to-Report candidate.
 
-3. Agent and Studio completion
-   - Make Agent tab execute real workflows.
-   - Add smoke tests for all Studio output types.
-   - Add recovery actions when generation fails.
+In particular, older or recovered implementation evidence for Study Guide, Mind Map, Quiz, Flashcards, Audio Overview, OCR fallback, transcription language selection, or other source types must be treated as legacy-only until each capability is revalidated against the current candidate build with:
 
-4. Voice and media generation
-   - Evaluate Voicebox service integration.
-   - Add production TTS service with stable voice selection.
-   - Decide short-video scope for v1.
+- real API behavior;
+- persistence and reopening;
+- authorization and cross-workspace isolation;
+- error handling and disabled-state behavior;
+- responsive authenticated dashboard evidence;
+- acceptance tests or production smoke coverage for the current candidate.
 
-5. Android app
-   - Freeze mobile API contract.
-   - Build native Android sign-in, notebook list, source upload, chat, Studio output, and audio playback.
+## Open release gates
 
-## Next Highest-Priority Task
+- `api.atlaslm.cloud` DNS resolution.
+- TLS certificate, chain, expiry, renewal, and HTTP-to-HTTPS redirect.
+- Public/private network-boundary verification.
+- Candidate backend deployment without Vercel Production redirection.
+- HTTPS smoke for FastAPI, database, Mastra, Redis, worker, queue, auth, CORS, ingestion, chat, citation, Report, persistence, isolation, retry, idempotency, and rollback.
+- Vercel Preview connected to the verified backend.
+- Authenticated dashboard evidence at desktop, laptop, tablet, and mobile widths.
 
-Add generic media-link ingestion for public social/video/audio URLs where feasible.
+## Current next step
 
-Reason: users expect to paste YouTube, Instagram, TikTok, LinkedIn, and other media links into one source flow. YouTube is real; the broader media-link path is still the biggest visible ingestion gap.
+Wait for DNS to resolve:
 
-## Operating Loop
+```text
+api.atlaslm.cloud -> 212.227.44.13
+```
 
-For each loop:
-
-1. Understand the goal.
-2. Break into phases.
-3. Choose the next highest-priority slice.
-4. Implement it.
-5. Test it locally and, when relevant, in production.
-6. Fix failures inside the iteration budget.
-7. Update this document.
-8. Report completed, failed, and next.
+Until that resolves publicly, do not provision production TLS, redirect Vercel Production, describe the backend as publicly available, enable unfinished Studio modules, begin Android development, or begin the Research Interest Agent.

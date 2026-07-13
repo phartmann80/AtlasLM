@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -9,7 +10,7 @@ import re
 
 from ..core.database import get_db
 from ..core.config import settings
-from ..models import Workspace, Document, ChatSession, ChatMessage, WorkspaceGraphEdge, CanvasPosition, UserProfile, SynthesisNode, SynthesisInput
+from ..models import Workspace, Document, DocumentChunk, ChatSession, ChatMessage, WorkspaceGraphEdge, CanvasPosition, UserProfile, SynthesisNode, SynthesisInput, AIRun, AIRunEvent, WorkspaceLayout
 from ..schemas import (
     WorkspaceCreate, WorkspaceOut, DocumentOut, 
     ChatSessionCreate, ChatSessionOut, ChatSessionDetailsOut,
@@ -18,6 +19,7 @@ from ..schemas import (
     OnboardingFlagsOut, OnboardingFlagsUpdate,
     SynthesisNodeCreate, SynthesisNodeUpdate, SynthesisNodeOut, SynthesisInputCreate
 )
+from ..schemas import ReportCreate, AIRunOut, AIRunEventOut, WorkspaceLayoutOut, WorkspaceLayoutUpdate
 from ..services.youtube_extract import (
     extract_youtube_transcript, YouTubeExtractError, extract_video_id,
 )
@@ -34,6 +36,15 @@ from ..models import StudioOutput, StudioOutputCitation
 from ..schemas import StudioOutputCreate, StudioOutputOut, StudioCitationOut
 from ..services.research.service import DeepResearchService
 from ..services.research import jobs as research_jobs
+from ..services.ai_runtime import (
+    AIRuntimeError,
+    append_run_event,
+    call_mastra_report,
+    create_run,
+    generate_legacy_report,
+    request_trace_id,
+    stream_mastra_chat,
+)
 from pydantic import BaseModel
 
 _research = DeepResearchService()
@@ -186,6 +197,45 @@ def get_document_status(
         "id": str(doc.id),
         "status": doc.status,
         "error_message": doc.error_message,
+    }
+
+
+@router.get("/documents/{document_id}/preview")
+def preview_document(
+    request: Request,
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    """Return a small, citable preview so users can verify what Atlas indexed."""
+    uid = current_user_id(request)
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    _get_owned_workspace(doc.workspace_id, uid, db)
+    chunks = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == doc.id)
+        .order_by(DocumentChunk.chunk_index.asc())
+        .limit(12)
+        .all()
+    )
+    return {
+        "id": str(doc.id),
+        "filename": doc.filename,
+        "file_type": doc.file_type,
+        "source_url": doc.source_url,
+        "status": doc.status,
+        "error_message": doc.error_message,
+        "chunks": [
+            {
+                "id": str(chunk.id),
+                "content": chunk.content,
+                "page_number": chunk.page_number,
+                "timestamp": chunk.timestamp,
+                "sheet": chunk.sheet,
+            }
+            for chunk in chunks
+        ],
     }
 
 
@@ -537,12 +587,45 @@ async def chat_stream(
 
     scope = scoped_document_ids(db, ws, message.synthesis_node_id)
 
+    if settings.ATLAS_CHAT_RUNTIME == "mastra":
+        run = create_run(
+            db,
+            user_id=uid,
+            workspace_id=session.workspace_id,
+            agent_id="notebook-research-agent",
+            workflow_id="grounded-answer-workflow",
+            runtime="mastra",
+            request_id=request.headers.get("X-Request-ID"),
+            idempotency_key=None,
+            metadata={"session_id": str(session_id), "mode": message.mode},
+        )
+        append_run_event(db, run, "dispatch", "running", 15, "Sending the grounded question to Mastra")
+
+        async def proxy():
+            try:
+                async for chunk in stream_mastra_chat(
+                    run=run,
+                    session_id=session_id,
+                    question=message.content,
+                    source_ids=scope,
+                    mode=message.mode,
+                ):
+                    yield chunk
+                append_run_event(db, run, "saved", "completed", 100, "Conversation saved")
+            except AIRuntimeError as exc:
+                db.rollback()
+                append_run_event(db, run, "failed", "failed", 100, str(exc), {"error_code": exc.code})
+                yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n".encode("utf-8")
+
+        return StreamingResponse(proxy(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
     rag = RAGService(db)
     return StreamingResponse(
         rag.execute_rag_chat_stream(
             workspace_id=session.workspace_id,
             session_id=session_id,
             user_message=message.content,
+            answer_mode=message.mode,
             scope_doc_ids=scope,
         ),
         media_type="text/event-stream",
@@ -607,7 +690,7 @@ def list_studio_types():
 
 
 @router.post("/workspaces/{workspace_id}/studio", response_model=StudioOutputOut, status_code=201)
-def create_studio_output(
+async def create_studio_output(
     request: Request,
     workspace_id: uuid.UUID,
     payload: StudioOutputCreate,
@@ -615,6 +698,128 @@ def create_studio_output(
 ):
     uid = current_user_id(request)
     ws = _get_owned_workspace(workspace_id, uid, db)
+
+    # Report is the first durable Atlas workflow. It gets its own run record,
+    # event stream, idempotency handling, and optional Mastra runtime while
+    # retaining the existing Studio endpoint for backwards compatibility.
+    if payload.output_type == "report":
+        if payload.idempotency_key:
+            existing_output = db.query(StudioOutput).filter(
+                StudioOutput.workspace_id == ws.id,
+                StudioOutput.output_type == "report",
+                StudioOutput.idempotency_key == payload.idempotency_key,
+            ).first()
+            if existing_output:
+                return _serialize_studio(db, existing_output)
+
+        scope = payload.source_ids
+        if scope is None:
+            scope = scoped_document_ids(db, ws, payload.synthesis_node_id)
+        if scope is not None:
+            scoped_rows = db.query(Document).filter(
+                Document.workspace_id == ws.id,
+                Document.id.in_(scope),
+            ).all() if scope else []
+            if len(scoped_rows) != len(set(scope)):
+                raise HTTPException(status_code=403, detail="One or more report sources are not in this notebook.")
+            not_ready = [row.filename for row in scoped_rows if row.status != "ready"]
+            if not_ready:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"These sources are not ready yet: {', '.join(not_ready[:3])}",
+                )
+
+        runtime = settings.ATLAS_REPORT_RUNTIME if settings.ATLAS_REPORT_RUNTIME in {"legacy", "mastra"} else "legacy"
+        trace_id = request_trace_id(request.headers.get("X-Request-ID"))
+        run = create_run(
+            db,
+            user_id=uid,
+            workspace_id=ws.id,
+            agent_id="notebook-research-agent",
+            workflow_id="report-workflow",
+            runtime=runtime,
+            request_id=request.headers.get("X-Request-ID"),
+            idempotency_key=payload.idempotency_key,
+            metadata={"output_type": "report", "length": payload.length, "focus": payload.focus},
+        )
+        output = StudioOutput(
+            id=uuid.uuid4(),
+            workspace_id=ws.id,
+            synthesis_node_id=payload.synthesis_node_id,
+            output_type="report",
+            title=payload.title or _default_studio_title("report"),
+            status="pending",
+            run_id=run.id,
+            runtime=runtime,
+            source_scope=[str(source_id) for source_id in scope] if scope else None,
+            idempotency_key=payload.idempotency_key,
+            progress=0,
+        )
+        db.add(output)
+        db.commit()
+        db.refresh(output)
+        try:
+            if runtime == "mastra":
+                append_run_event(db, run, "dispatch", "running", 15, "Sending the report workflow to Mastra")
+                result = await call_mastra_report(
+                    run=run,
+                    output=output,
+                    request_id=request.headers.get("X-Request-ID"),
+                    source_ids=scope,
+                    focus=payload.focus,
+                    length=payload.length,
+                )
+                db.refresh(output)
+                if result.get("status") == "ready":
+                    run.status = "completed"
+                    append_run_event(db, run, "saved", "completed", 100, "Mastra report saved")
+                else:
+                    run.status = "failed"
+                    run.error_code = "mastra_report_failed"
+                    run.error_message = result.get("error") or "Mastra could not finish the report."
+                    db.commit()
+            else:
+                await generate_legacy_report(
+                    db,
+                    run,
+                    output,
+                    scope,
+                    payload.focus,
+                    payload.length,
+                )
+        except AIRuntimeError as exc:
+            db.rollback()
+            output = db.query(StudioOutput).filter(StudioOutput.id == output.id).first()
+            run = db.query(AIRun).filter(AIRun.id == run.id).first()
+            if output:
+                output.status = "failed"
+                output.error = str(exc)
+                output.progress = 100
+                output.retry_count = (output.retry_count or 0) + 1
+                db.commit()
+            if run:
+                run.status = "failed"
+                run.error_code = exc.code
+                run.error_message = str(exc)
+                db.commit()
+                append_run_event(db, run, "failed", "failed", 100, str(exc), {"error_code": exc.code})
+        except Exception:
+            db.rollback()
+            output = db.query(StudioOutput).filter(StudioOutput.id == output.id).first()
+            run = db.query(AIRun).filter(AIRun.id == run.id).first()
+            if output:
+                output.status = "failed"
+                output.error = "Atlas could not finish this report. Please try again."
+                output.progress = 100
+                output.retry_count = (output.retry_count or 0) + 1
+                db.commit()
+            if run:
+                run.status = "failed"
+                run.error_code = "unexpected_error"
+                run.error_message = "Report generation failed."
+                db.commit()
+                append_run_event(db, run, "failed", "failed", 100, "Report generation failed.")
+        return _serialize_studio(db, output)
 
     # Resolve scope with the EXISTING Patch 007 helper. A forged or cross-user
     # synthesis_node_id yields 404 here and can never widen scope.
@@ -639,8 +844,42 @@ def create_studio_output(
     db.commit()
     db.refresh(output)
 
-    # Enqueue on the SAME Redis studio queue from Patch 005 (dual-queue safe).
-    enqueue_studio_job(output_id=output.id, scope_doc_ids=scope)
+    # Generate inline so a missing or paused worker cannot leave the user with
+    # a permanent "Building" card. These artifacts are intentionally small
+    # and the API already has a 300 second execution budget in production.
+    try:
+        from ..services.rag import retrieve_chunks
+        from ..services.studio_outputs import generate_studio_output
+
+        chunks = retrieve_chunks(
+            notebook_id=str(ws.id),
+            query="key concepts, definitions, claims, facts, and main points across the sources",
+            source_ids=[str(doc_id) for doc_id in scope] if scope is not None else [],
+            k=24,
+        )
+        content, citations = generate_studio_output(payload.output_type, chunks)
+        output.content = content
+        output.status = "ready"
+        output.error = None
+        db.add_all([
+            StudioOutputCitation(
+                studio_output_id=output.id,
+                document_id=uuid.UUID(citation["document_id"])
+                if isinstance(citation["document_id"], str)
+                else citation["document_id"],
+                page_number=citation.get("page_number"),
+            )
+            for citation in citations
+        ])
+        db.commit()
+        db.refresh(output)
+    except Exception as exc:
+        db.rollback()
+        output = db.query(StudioOutput).filter_by(id=output.id).first()
+        if output:
+            output.status = "failed"
+            output.error = str(exc) if isinstance(exc, (ValueError, ProviderError)) else "Atlas could not finish this output. Please try again."
+            db.commit()
 
     return _serialize_studio(db, output)
 
@@ -659,6 +898,22 @@ def list_studio_outputs(
         .order_by(StudioOutput.created_at.desc())
         .all()
     )
+    stale_cutoff = datetime.now(timezone.utc).timestamp() - (10 * 60)
+    changed = False
+    for row in rows:
+        created_at = row.created_at
+        if created_at is not None:
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if (
+                row.status in {"pending", "processing"}
+                and created_at.timestamp() < stale_cutoff
+            ):
+                row.status = "failed"
+                row.error = "This output did not finish. Generate it again to retry."
+                changed = True
+    if changed:
+        db.commit()
     return [_serialize_studio(db, r) for r in rows]
 
 
@@ -698,6 +953,7 @@ def delete_studio_output(
 
 def _default_studio_title(output_type: str) -> str:
     return {
+        "report": "Atlas Research Report",
         "mind_map": "Mind Map",
         "study_guide": "Study Guide",
         "quiz": "Quiz",
@@ -706,11 +962,145 @@ def _default_studio_title(output_type: str) -> str:
 
 
 def _serialize_studio(db, output):
-    cites = (db.query(StudioOutputCitation)
-               .filter_by(studio_output_id=output.id).all())
+    cites = (db.query(StudioOutputCitation, Document)
+               .join(Document, StudioOutputCitation.document_id == Document.id)
+               .filter(StudioOutputCitation.studio_output_id == output.id)
+               .all())
     out = StudioOutputOut.model_validate(output)
-    out.citations = [StudioCitationOut.model_validate(c) for c in cites]
+    out.citations = [StudioCitationOut(
+        document_id=citation.document_id,
+        chunk_id=citation.chunk_id,
+        page_number=citation.page_number,
+        filename=document.filename,
+        quote=citation.quote,
+        source_url=citation.source_url or document.source_url,
+    ) for citation, document in cites]
     return out
+
+
+# ---- AI run and dashboard layout contracts ---------------------------------
+
+DEFAULT_LAYOUT = {
+    "source_panel_width": 320,
+    "output_panel_width": 360,
+    "source_panel_collapsed": False,
+    "output_panel_collapsed": False,
+}
+
+
+@router.get("/workspaces/{workspace_id}/ai-runs", response_model=list[AIRunOut])
+def list_ai_runs(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    uid = current_user_id(request)
+    ws = _get_owned_workspace(workspace_id, uid, db)
+    return db.query(AIRun).filter(
+        AIRun.workspace_id == ws.id,
+        AIRun.user_id == uid,
+    ).order_by(AIRun.created_at.desc()).limit(50).all()
+
+
+@router.get("/workspaces/{workspace_id}/ai-runs/{run_id}/events", response_model=list[AIRunEventOut])
+def list_ai_run_events(
+    request: Request,
+    workspace_id: uuid.UUID,
+    run_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    uid = current_user_id(request)
+    ws = _get_owned_workspace(workspace_id, uid, db)
+    run = db.query(AIRun).filter(
+        AIRun.id == run_id,
+        AIRun.workspace_id == ws.id,
+        AIRun.user_id == uid,
+    ).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="AI run not found")
+    return db.query(AIRunEvent).filter(AIRunEvent.run_id == run.id).order_by(AIRunEvent.created_at.asc()).all()
+
+
+def _safe_layout(value: dict[str, Any]) -> dict[str, Any]:
+    """Only persist known layout fields and bounded panel dimensions."""
+    result = dict(DEFAULT_LAYOUT)
+    for key in ("source_panel_collapsed", "output_panel_collapsed"):
+        if key in value:
+            result[key] = bool(value[key])
+    for key in ("source_panel_width", "output_panel_width"):
+        if key in value:
+            try:
+                result[key] = max(240, min(520, int(value[key])))
+            except (TypeError, ValueError):
+                pass
+    return result
+
+
+@router.get("/workspaces/{workspace_id}/layout", response_model=WorkspaceLayoutOut)
+def get_workspace_layout(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    uid = current_user_id(request)
+    ws = _get_owned_workspace(workspace_id, uid, db)
+    row = db.query(WorkspaceLayout).filter(
+        WorkspaceLayout.workspace_id == ws.id,
+        WorkspaceLayout.user_id == uid,
+    ).first()
+    if not row:
+        return {
+            "workspace_id": ws.id,
+            "layout": DEFAULT_LAYOUT,
+            "updated_at": ws.created_at,
+        }
+    return row
+
+
+@router.put("/workspaces/{workspace_id}/layout", response_model=WorkspaceLayoutOut)
+def save_workspace_layout(
+    request: Request,
+    workspace_id: uuid.UUID,
+    payload: WorkspaceLayoutUpdate,
+    db: Session = Depends(get_db),
+):
+    uid = current_user_id(request)
+    ws = _get_owned_workspace(workspace_id, uid, db)
+    row = db.query(WorkspaceLayout).filter(
+        WorkspaceLayout.workspace_id == ws.id,
+        WorkspaceLayout.user_id == uid,
+    ).first()
+    if not row:
+        row = WorkspaceLayout(
+            id=uuid.uuid4(),
+            user_id=uid,
+            workspace_id=ws.id,
+            layout=_safe_layout(payload.layout),
+        )
+        db.add(row)
+    else:
+        row.layout = _safe_layout(payload.layout)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.delete("/workspaces/{workspace_id}/layout", status_code=204)
+def reset_workspace_layout(
+    request: Request,
+    workspace_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    uid = current_user_id(request)
+    ws = _get_owned_workspace(workspace_id, uid, db)
+    row = db.query(WorkspaceLayout).filter(
+        WorkspaceLayout.workspace_id == ws.id,
+        WorkspaceLayout.user_id == uid,
+    ).first()
+    if row:
+        db.delete(row)
+        db.commit()
+    return None
 
 
 # ---- Deep Research schemas --------------------------------------------------

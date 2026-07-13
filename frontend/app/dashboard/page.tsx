@@ -1,131 +1,178 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  AlertTriangle,
-  Bot,
+  ArrowUpRight,
   BookOpen,
-  CheckCircle2,
+  BrainCircuit,
+  Check,
+  ChevronDown,
+  ChevronLeft,
   ChevronRight,
-  Database,
+  CircleAlert,
+  Cloud,
+  FileAudio,
   FileText,
-  Globe,
-  ImageIcon,
+  FileUp,
+  FolderOpen,
+  Globe2,
+  Headphones,
   Layers3,
+  Lightbulb,
   Loader2,
-  Map,
-  MessageSquare,
-  Mic,
+  MessageCircle,
+  Mic2,
+  MoreHorizontal,
   Network,
+  PanelRight,
+  Play,
   Plus,
+  Quote,
   Search,
   Send,
   Sparkles,
+  SquareArrowOutUpRight,
   Trash2,
-  Upload,
+  UploadCloud,
   Video,
-  Wand2,
+  WandSparkles,
+  X,
 } from "lucide-react";
-import Logo from "../../components/brand/logo";
-import UserMenu from "../../components/UserMenu";
+import type { LucideIcon } from "lucide-react";
+import type { CSSProperties, FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiClient } from "@/lib/apiClient";
-import { supabaseBrowser, getCurrentProfile } from "@/lib/supabaseClient";
-import AddSourceModal from "@/app/components/sources/AddSourceModal";
-import DeepResearchDrawer from "@/app/components/research/DeepResearchDrawer";
-import AudioOverviewPanel from "@/app/components/audio/AudioOverviewPanel";
-import { OnboardingTour } from "@/app/dashboard/OnboardingTour";
-import { citationLabel } from "@/lib/sources";
-import "@/app/components/research/deep-research.css";
+import { type AudioOverview } from "@/lib/audio";
+import "./atlas-workspace.css";
 
-type Workspace = {
-  id: string;
-  name: string;
-  created_at?: string;
-};
-
-type DocumentSource = {
+type Workspace = { id: string; name: string; created_at?: string };
+type SourceStatus = "pending" | "processing" | "ready" | "failed";
+type Source = {
   id: string;
   workspace_id?: string;
   filename: string;
   file_type: string;
   source_url?: string | null;
-  status: "pending" | "processing" | "ready" | "failed";
+  status: SourceStatus;
   error_message?: string | null;
   created_at: string;
 };
-
-type ChatSession = {
-  id: string;
-  workspace_id: string;
-  title: string;
-  created_at: string;
+type Citation = {
+  chunk_id?: string;
+  document_id?: string;
+  filename?: string;
+  content?: string;
+  text?: string;
+  page_number?: number;
+  timestamp?: number;
+  source_url?: string;
+  external_url?: string;
+  quote?: string;
+  source_label?: string;
+  venue?: string;
+  file_type?: string;
 };
-
 type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  citations?: any[];
+  citations?: Citation[];
 };
-
+type SourcePreview = {
+  id: string;
+  filename: string;
+  file_type: string;
+  source_url?: string | null;
+  status: SourceStatus;
+  error_message?: string | null;
+  chunks: Array<{
+    id: string;
+    content: string;
+    page_number?: number | null;
+    timestamp?: number | null;
+    sheet?: string | null;
+  }>;
+};
 type StudioOutput = {
   id: string;
-  workspace_id: string;
-  synthesis_node_id: string | null;
-  output_type: "mind_map" | "study_guide" | "quiz" | "flashcards";
+  output_type: "report" | "mind_map" | "study_guide" | "quiz" | "flashcards";
   title: string;
-  status: "pending" | "processing" | "ready" | "failed";
-  content: any | null;
-  error: string | null;
-  error_message?: string | null;
-  citations: any[];
+  status: string;
+  content: Record<string, unknown> | string | null;
+  error?: string | null;
   created_at: string;
+  citations?: Citation[];
+};
+type Panel = "workspace" | "sources" | "outputs" | "audio";
+type SourceFilter = "all" | "ready" | "processing";
+type AnswerMode = "auto" | "sources" | "general";
+type LayoutState = {
+  source_panel_width: number;
+  output_panel_width: number;
+  source_panel_collapsed: boolean;
+  output_panel_collapsed: boolean;
 };
 
-type DashboardView = "ask" | "notes" | "studio" | "canvas" | "agent";
+const DEFAULT_LAYOUT: LayoutState = {
+  source_panel_width: 320,
+  output_panel_width: 360,
+  source_panel_collapsed: false,
+  output_panel_collapsed: false,
+};
 
-const STUDIO_CARDS = [
-  { id: "study_guide", label: "Study Guide", icon: BookOpen, accent: "text-emerald-300 bg-emerald-500/10 border-emerald-500/20" },
-  { id: "mind_map", label: "Mind Map", icon: Network, accent: "text-sky-300 bg-sky-500/10 border-sky-500/20" },
-  { id: "quiz", label: "Quiz", icon: CheckCircle2, accent: "text-amber-300 bg-amber-500/10 border-amber-500/20" },
-  { id: "flashcards", label: "Flashcards", icon: Layers3, accent: "text-violet-300 bg-violet-500/10 border-violet-500/20" },
+const SOURCE_TYPES = [
+  { label: "PDFs", detail: "Research papers, chapters, reports", icon: FileText, tone: "coral" },
+  { label: "Websites", detail: "Articles, docs, public pages", icon: Globe2, tone: "blue" },
+  { label: "YouTube", detail: "Video transcripts with timestamps", icon: Video, tone: "red" },
+  { label: "Audio files", detail: "Lectures, interviews, recordings", icon: FileAudio, tone: "violet" },
+  { label: "Google Docs", detail: "Bring in connected documents", icon: BookOpen, tone: "green" },
+  { label: "Google Slides", detail: "Use decks as source material", icon: Layers3, tone: "amber" },
 ] as const;
 
-const SUGGESTED_PROMPTS = [
-  "What are the strongest claims across these sources?",
-  "Where do the sources disagree?",
-  "Summarize this notebook with citations.",
-  "Turn this material into an action plan.",
+const ACTIONS: Array<{
+  id: string;
+  label: string;
+  detail: string;
+  icon: LucideIcon;
+  tone: string;
+  prompt?: string;
+  studio?: StudioOutput["output_type"];
+  available?: boolean;
+  unavailableReason?: string;
+}> = [
+  { id: "report", label: "Generate a report", detail: "Turn ready sources into a cited deliverable", icon: FileText, tone: "coral", studio: "report" },
+  { id: "summary", label: "Summarize", detail: "Get the clearest version of your sources", icon: WandSparkles, tone: "blue", prompt: "Summarize the key ideas across my sources and cite every important claim." },
+  { id: "explain", label: "Explain a concept", detail: "Break something complex into steps", icon: Lightbulb, tone: "amber", prompt: "Explain the most important concept in my sources step by step, with a real-world example." },
+  { id: "compare", label: "Compare sources", detail: "See where approaches agree or differ", icon: Network, tone: "violet", prompt: "Compare the main approaches across my sources. Show agreement, disagreement, and why it matters." },
+  { id: "insights", label: "Find insights", detail: "Surface trends, metrics, and opportunities", icon: BrainCircuit, tone: "green", prompt: "Extract the strongest trends, metrics, hidden opportunities, and open questions from my sources." },
+  { id: "study", label: "Make a study guide", detail: "Planned after the Report milestone", icon: BookOpen, tone: "blue", available: false, unavailableReason: "Study tools will be enabled after the notebook-to-report review." },
+  { id: "flashcards", label: "Create flashcards", detail: "Planned after the Report milestone", icon: Layers3, tone: "violet", available: false, unavailableReason: "Flashcards will be enabled after the notebook-to-report review." },
+  { id: "quiz", label: "Build a practice quiz", detail: "Planned after the Report milestone", icon: Check, tone: "amber", available: false, unavailableReason: "Quizzes will be enabled after the notebook-to-report review." },
+  { id: "business", label: "Make an executive brief", detail: "Decisions, risks, and next steps", icon: PanelRight, tone: "green", prompt: "Create an executive summary with decisions, risks, opportunities, and recommended next steps. Cite the source for each claim." },
+  { id: "writing", label: "Strengthen my writing", detail: "Check arguments and generate citations", icon: Quote, tone: "coral", prompt: "Review the argument I am working toward using my sources. Identify weak links, missing evidence, and suggest citation-backed improvements." },
+  { id: "questions", label: "Prepare discussion questions", detail: "Useful prompts for class or meetings", icon: MessageCircle, tone: "blue", prompt: "Create thoughtful discussion questions from my sources, including suggested answers with citations." },
 ];
 
-function normalizeStatus(status?: string): DocumentSource["status"] {
+function normalizeStatus(status?: string): SourceStatus {
   if (status === "pending" || status === "processing" || status === "failed") return status;
   return "ready";
 }
 
-function sourceIcon(type: string) {
+function sourceIcon(type: string): LucideIcon {
   const kind = type.toLowerCase();
   if (kind.includes("youtube")) return Video;
-  if (kind.includes("audio")) return Mic;
-  if (kind.includes("image")) return ImageIcon;
-  if (kind.includes("url") || kind.includes("web")) return Globe;
+  if (kind.includes("audio")) return FileAudio;
+  if (kind.includes("url") || kind.includes("web")) return Globe2;
   return FileText;
 }
 
-function sourceTone(type: string) {
+function sourceTone(type: string): string {
   const kind = type.toLowerCase();
-  if (kind.includes("pdf")) return "text-rose-300 bg-rose-500/10 border-rose-500/20";
-  if (kind.includes("youtube")) return "text-red-300 bg-red-500/10 border-red-500/20";
-  if (kind.includes("audio")) return "text-emerald-300 bg-emerald-500/10 border-emerald-500/20";
-  if (kind.includes("image")) return "text-orange-300 bg-orange-500/10 border-orange-500/20";
-  if (kind.includes("csv") || kind.includes("xlsx")) return "text-emerald-300 bg-emerald-500/10 border-emerald-500/20";
-  if (kind.includes("url") || kind.includes("web")) return "text-sky-300 bg-sky-500/10 border-sky-500/20";
-  return "text-violet-300 bg-violet-500/10 border-violet-500/20";
-}
-
-function outputLabel(type: string) {
-  return type.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+  if (kind.includes("youtube")) return "red";
+  if (kind.includes("audio")) return "violet";
+  if (kind.includes("url") || kind.includes("web")) return "blue";
+  if (kind.includes("docx") || kind.includes("pptx")) return "amber";
+  return "coral";
 }
 
 function formatDate(value?: string) {
@@ -133,1572 +180,699 @@ function formatDate(value?: string) {
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function extractYoutubeTimestamp(content: string): string {
-  if (!content) return "";
-  const match = content.match(/##\s*\[(\d+:\d+(?::\d+)?)\]/);
-  if (match) return match[1];
-  const fallback = content.match(/\[(\d+:\d+(?::\d+)?)\]/);
-  return fallback ? fallback[1] : "";
+function formatDuration(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.floor(seconds % 60).toString().padStart(2, "0");
+  return `${minutes}:${remainder}`;
 }
 
-function parseTimeToSeconds(timeStr: string): number {
-  if (!timeStr) return 0;
-  const parts = timeStr.split(":").map(Number);
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  return parts[0] || 0;
+function outputLabel(value: string) {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function messageCitations(value: unknown): Citation[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value as Citation[];
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error) || !error.message) return fallback;
+  const json = error.message.match(/(\{.*\})/);
+  if (json) {
+    try {
+      const payload = JSON.parse(json[1]) as { detail?: string };
+      if (payload.detail) return payload.detail;
+    } catch {
+      // Keep the transport error when the body is not JSON.
+    }
+  }
+  return error.message;
 }
 
 export default function Dashboard() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
-  const [sources, setSources] = useState<DocumentSource[]>([]);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [sources, setSources] = useState<Source[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const [streamingText, setStreamingText] = useState("");
-  const [citationsMap, setCitationsMap] = useState<Record<string, any>>({});
-  const [selectedCitation, setSelectedCitation] = useState<any | null>(null);
-  const [studioOutputs, setStudioOutputs] = useState<StudioOutput[]>([]);
-  const [openOutput, setOpenOutput] = useState<StudioOutput | null>(null);
-  const [view, setView] = useState<DashboardView>("ask");
-  const [token, setToken] = useState("");
-  const [userTier, setUserTier] = useState<"Free" | "Pro" | "Team">("Free");
-  const [engineStatus, setEngineStatus] = useState<"active" | "inactive" | "loading">("loading");
-  const [showAddSource, setShowAddSource] = useState(false);
-  const [deepResearchOpen, setDeepResearchOpen] = useState(false);
-  const [uiError, setUiError] = useState("");
-  const [sourceFilter, setSourceFilter] = useState("");
-  const [notes, setNotes] = useState("");
-  const [notesSaving, setNotesSaving] = useState(false);
-  const [activeScopeNode, setActiveScopeNode] = useState<{ id: string; title: string; count: number } | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [input, setInput] = useState("");
+  const [panel, setPanel] = useState<Panel>("workspace");
+  const [answerMode, setAnswerMode] = useState<AnswerMode>("auto");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [engine, setEngine] = useState<"checking" | "cloud" | "local">("checking");
+  const [showSourceComposer, setShowSourceComposer] = useState(false);
+  const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
+  const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
+  const [selectedSource, setSelectedSource] = useState<Source | null>(null);
+  const [sourcePreview, setSourcePreview] = useState<SourcePreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [selectedOutput, setSelectedOutput] = useState<StudioOutput | null>(null);
+  const [outputs, setOutputs] = useState<StudioOutput[]>([]);
+  const [generatingOutput, setGeneratingOutput] = useState<string | null>(null);
+  const [audio, setAudio] = useState<AudioOverview | null>(null);
+  const audioLoading = false;
+  const audioUrl: string | null = null;
+  const [audioPlaying, setAudioPlaying] = useState(false);
+  const [sourceInput, setSourceInput] = useState("");
+  const [sourceTextTitle, setSourceTextTitle] = useState("");
+  const [sourceText, setSourceText] = useState("");
+  const [sourceMode, setSourceMode] = useState<"files" | "link" | "text">("files");
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [citationMap, setCitationMap] = useState<Record<string, Citation>>({});
+  const [streamingHasSources, setStreamingHasSources] = useState(false);
+  const [layout, setLayout] = useState<LayoutState>(DEFAULT_LAYOUT);
+  const [layoutLoaded, setLayoutLoaded] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const citationMapRef = useRef<Record<string, Citation>>({});
+  const resizeRef = useRef<{ panel: "source" | "output"; startX: number; startWidth: number } | null>(null);
 
-  const streamingAccumRef = useRef("");
-  const citationsMapRef = useRef<Record<string, any>>({});
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const creatingWorkspaceRef = useRef<Promise<Workspace | null> | null>(null);
-
-  const readySources = useMemo(
-    () => sources.filter((source) => source.status === "ready"),
-    [sources],
-  );
+  const readySources = useMemo(() => sources.filter((source) => source.status === "ready"), [sources]);
   const processingSources = useMemo(
     () => sources.filter((source) => source.status === "pending" || source.status === "processing"),
     [sources],
   );
-  const failedSources = useMemo(
-    () => sources.filter((source) => source.status === "failed"),
-    [sources],
-  );
-  const filteredSources = useMemo(() => {
-    const query = sourceFilter.trim().toLowerCase();
-    if (!query) return sources;
-    return sources.filter((source) =>
-      `${source.filename} ${source.file_type}`.toLowerCase().includes(query),
-    );
-  }, [sources, sourceFilter]);
-
-  const getErrorMessage = (err: unknown, fallback: string) => {
-    if (err instanceof Error && err.message) {
-      const jsonMatch = err.message.match(/(\{.*\})/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[1]);
-          if (typeof parsed.detail === "string") return parsed.detail;
-        } catch {
-          // Keep the original message below.
-        }
-      }
-      return err.message;
-    }
-    return fallback;
-  };
-
-  const createWorkspace = useCallback(async (name: string): Promise<Workspace> => {
-    const workspace = await apiClient.post<Workspace>("/api/v1/workspaces", { name });
-    setWorkspaces((prev) => {
-      if (prev.some((item) => item.id === workspace.id)) return prev;
-      return [workspace, ...prev];
+  const visibleSources = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return sources.filter((source) => {
+      const matchesFilter = sourceFilter === "all"
+        || (sourceFilter === "ready" && source.status === "ready")
+        || (sourceFilter === "processing" && (source.status === "pending" || source.status === "processing"));
+      const matchesQuery = !query || `${source.filename} ${source.file_type}`.toLowerCase().includes(query);
+      return matchesFilter && matchesQuery;
     });
-    setSelectedWorkspace(workspace);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("selectedWorkspaceId", workspace.id);
-    }
-    setUiError("");
-    return workspace;
+  }, [search, sourceFilter, sources]);
+
+  const setWorkspaceAndPersist = useCallback((next: Workspace) => {
+    setWorkspace(next);
+    setSources([]);
+    setOutputs([]);
+    setMessages([]);
+    setSessionId(null);
+    setAudio(null);
+    setSelectedOutput(null);
+    setLayout(DEFAULT_LAYOUT);
+    setLayoutLoaded(false);
+    if (typeof window !== "undefined") window.localStorage.setItem("atlas:selected-workspace", next.id);
   }, []);
 
-  const fetchWorkspaces = useCallback(async () => {
+  const resizePanel = useCallback((panel: "source" | "output", width: number) => {
+    const bounded = Math.max(240, Math.min(520, Math.round(width)));
+    setLayout((current) => panel === "source"
+      ? { ...current, source_panel_width: bounded }
+      : { ...current, output_panel_width: bounded });
+  }, []);
+
+  const resetLayout = useCallback(async () => {
+    setLayout(DEFAULT_LAYOUT);
+    setLayoutLoaded(true);
+    if (workspace) await apiClient.del(`/api/v1/workspaces/${workspace.id}/layout`).catch(() => undefined);
+    setNotice("Atlas layout reset.");
+  }, [workspace]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    let active = true;
+    void apiClient.get<{ layout?: LayoutState }>(`/api/v1/workspaces/${workspace.id}/layout`)
+      .then((data) => { if (active && data.layout) setLayout({ ...DEFAULT_LAYOUT, ...data.layout }); })
+      .catch(() => undefined)
+      .finally(() => { if (active) setLayoutLoaded(true); });
+    return () => { active = false; };
+  }, [workspace]);
+
+  useEffect(() => {
+    if (!workspace || !layoutLoaded) return;
+    const timer = window.setTimeout(() => {
+      void apiClient.put(`/api/v1/workspaces/${workspace.id}/layout`, { layout }).catch(() => undefined);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [layout, layoutLoaded, workspace]);
+
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      const active = resizeRef.current;
+      if (!active) return;
+      const delta = active.panel === "source" ? event.clientX - active.startX : active.startX - event.clientX;
+      resizePanel(active.panel, active.startWidth + delta);
+    };
+    const end = () => {
+      resizeRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+    };
+  }, [resizePanel]);
+
+  const beginResize = (event: React.PointerEvent<HTMLButtonElement>, panel: "source" | "output") => {
+    event.preventDefault();
+    resizeRef.current = {
+      panel,
+      startX: event.clientX,
+      startWidth: panel === "source" ? layout.source_panel_width : layout.output_panel_width,
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  const keyboardResize = (event: React.KeyboardEvent<HTMLButtonElement>, panel: "source" | "output") => {
+    const current = panel === "source" ? layout.source_panel_width : layout.output_panel_width;
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      resizePanel(panel, current + (event.key === "ArrowRight" ? 16 : -16) * (panel === "source" ? 1 : -1));
+    }
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      resizePanel(panel, event.key === "Home" ? 240 : 520);
+    }
+  };
+
+  const createWorkspace = useCallback(async (name: string) => {
+    const created = await apiClient.post<Workspace>("/api/v1/workspaces", { name });
+    setWorkspaces((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+    setWorkspaceAndPersist(created);
+    return created;
+  }, [setWorkspaceAndPersist]);
+
+  const loadWorkspaces = useCallback(async () => {
     try {
       const data = await apiClient.get<Workspace[]>("/api/v1/workspaces");
-      if (data.length === 0) {
-        if (!creatingWorkspaceRef.current) {
-          creatingWorkspaceRef.current = createWorkspace("My first notebook").finally(() => {
-            creatingWorkspaceRef.current = null;
-          });
-        }
-        await creatingWorkspaceRef.current;
+      if (!data.length) {
+        await createWorkspace("My first workspace");
         return;
       }
       setWorkspaces(data);
-      const savedWorkspaceId = typeof window !== "undefined" ? localStorage.getItem("selectedWorkspaceId") : null;
-      const restored = data.find((workspace) => workspace.id === savedWorkspaceId) || data[0] || null;
-      setSelectedWorkspace(restored);
-      setUiError("");
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not load notebooks."));
+      const savedId = typeof window !== "undefined" ? window.localStorage.getItem("atlas:selected-workspace") : null;
+      setWorkspaceAndPersist(data.find((item) => item.id === savedId) || data[0]);
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not load your workspace."));
     }
-  }, [createWorkspace]);
+  }, [createWorkspace, setWorkspaceAndPersist]);
 
-  const fetchDocuments = useCallback(async (workspaceId: string) => {
-    try {
-      const data = await apiClient.get<DocumentSource[]>(`/api/v1/workspaces/${workspaceId}/documents`);
-      setSources(
-        data.map((source) => ({
-          ...source,
-          status: normalizeStatus(source.status),
-        })),
-      );
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not load sources."));
-    }
+  const loadSources = useCallback(async (workspaceId: string) => {
+    const data = await apiClient.get<Source[]>(`/api/v1/workspaces/${workspaceId}/documents`);
+    setSources(data.map((source) => ({ ...source, status: normalizeStatus(source.status) })));
   }, []);
 
-  const fetchStudioOutputs = useCallback(async (workspaceId: string) => {
-    try {
-      const data = await apiClient.get<StudioOutput[]>(`/api/v1/workspaces/${workspaceId}/studio`);
-      setStudioOutputs(data);
-      data.forEach((output) => {
-        if (output.status === "pending" || output.status === "processing") {
-          pollStudioOutput(output.id, workspaceId);
-        }
-      });
-    } catch (err) {
-      console.error("Failed to load studio outputs", err);
-    }
+  const loadOutputs = useCallback(async (workspaceId: string) => {
+    const data = await apiClient.get<StudioOutput[]>(`/api/v1/workspaces/${workspaceId}/studio`);
+    setOutputs(data);
   }, []);
 
-  const handleCreateSession = useCallback(async (workspaceId: string) => {
-    const session = await apiClient.post<ChatSession>(`/api/v1/workspaces/${workspaceId}/sessions`, {
-      title: "Grounded Q&A",
-    });
-    setSessions((prev) => [session, ...prev]);
-    setSelectedSessionId(session.id);
-    return session;
-  }, []);
-
-  const fetchSessions = useCallback(async (workspaceId: string) => {
-    try {
-      const data = await apiClient.get<ChatSession[]>(`/api/v1/workspaces/${workspaceId}/sessions`);
-      setSessions(data);
-      if (data.length === 0) {
-        await handleCreateSession(workspaceId);
-        return;
-      }
-      const savedSessionId = typeof window !== "undefined" ? localStorage.getItem(`selectedSessionId:${workspaceId}`) : null;
-      setSelectedSessionId(data.find((session) => session.id === savedSessionId)?.id || data[0].id);
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not load chat sessions."));
-    }
-  }, [handleCreateSession]);
-
-  const fetchSessionDetails = useCallback(async (sessionId: string) => {
-    try {
-      const data = await apiClient.get<{ messages?: Message[] } & ChatSession>(`/api/v1/sessions/${sessionId}`);
-      setMessages(data.messages || []);
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not load chat history."));
-    }
-  }, []);
+  const ensureSession = useCallback(async (workspaceId: string) => {
+    if (sessionId) return sessionId;
+    const existing = await apiClient.get<Array<{ id: string; title: string }>>(`/api/v1/workspaces/${workspaceId}/sessions`);
+    const active = existing[0] || await apiClient.post<{ id: string }>(`/api/v1/workspaces/${workspaceId}/sessions`, { title: "Ask Atlas" });
+    setSessionId(active.id);
+    return active.id;
+  }, [sessionId]);
 
   useEffect(() => {
-    fetchWorkspaces().catch(console.error);
-
-    const loadSession = async () => {
-      const supabase = supabaseBrowser();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (session?.access_token) setToken(session.access_token);
+    const workspaceTimer = window.setTimeout(() => void loadWorkspaces(), 0);
+    const engineTimer = window.setTimeout(() => {
+      void apiClient.get<{ providers: Array<{ id: string; status: string }> }>("/api/v1/settings/providers")
+        .then((data) => setEngine(data.providers.some((provider) => provider.id === "atlas-cloud" && provider.status === "active") ? "cloud" : "local"))
+        .catch(() => setEngine("local"));
+    }, 0);
+    return () => {
+      window.clearTimeout(workspaceTimer);
+      window.clearTimeout(engineTimer);
     };
-
-    const loadProfile = async () => {
-      try {
-        const profile = await getCurrentProfile();
-        if (profile?.tier) setUserTier(profile.tier);
-      } catch (err) {
-        console.error("Profile load failed", err);
-      }
-    };
-
-    const loadEngine = async () => {
-      try {
-        const data = await apiClient.get<{ providers: { id: string; status: string }[] }>("/api/v1/settings/providers");
-        const cloud = data.providers.find((provider) => provider.id === "atlas-cloud");
-        setEngineStatus(cloud?.status === "active" ? "active" : "inactive");
-      } catch {
-        setEngineStatus("inactive");
-      }
-    };
-
-    loadSession().catch(console.error);
-    loadProfile().catch(console.error);
-    loadEngine().catch(console.error);
-  }, [fetchWorkspaces]);
+  }, [loadWorkspaces]);
 
   useEffect(() => {
-    if (!selectedWorkspace) return;
-    localStorage.setItem("selectedWorkspaceId", selectedWorkspace.id);
-    setMessages([]);
-    setSelectedCitation(null);
-    setOpenOutput(null);
-    setActiveScopeNode(null);
-    setNotes(localStorage.getItem(`atlaslm-notes:${selectedWorkspace.id}`) || "");
-    fetchDocuments(selectedWorkspace.id);
-    fetchSessions(selectedWorkspace.id);
-    fetchStudioOutputs(selectedWorkspace.id);
-  }, [fetchDocuments, fetchSessions, fetchStudioOutputs, selectedWorkspace]);
-
-  useEffect(() => {
-    if (!selectedWorkspace || !selectedSessionId) return;
-    localStorage.setItem(`selectedSessionId:${selectedWorkspace.id}`, selectedSessionId);
-    fetchSessionDetails(selectedSessionId);
-  }, [fetchSessionDetails, selectedSessionId, selectedWorkspace]);
-
-  useEffect(() => {
-    if (!selectedWorkspace) return;
-    localStorage.setItem(`atlaslm-notes:${selectedWorkspace.id}`, notes);
-  }, [notes, selectedWorkspace]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, streamingText, view]);
-
-  useEffect(() => {
-    if (!selectedWorkspace || processingSources.length === 0) return;
-    const interval = setInterval(() => fetchDocuments(selectedWorkspace.id), 3000);
-    return () => clearInterval(interval);
-  }, [fetchDocuments, processingSources.length, selectedWorkspace]);
-
-  const handleCreateWorkspace = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const name = newWorkspaceName.trim();
-    if (!name) return;
-    try {
-      await createWorkspace(name);
-      setNewWorkspaceName("");
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not create notebook."));
-    }
-  };
-
-  const ensureWorkspace = useCallback(async (): Promise<Workspace | null> => {
-    if (selectedWorkspace) return selectedWorkspace;
-    if (workspaces[0]) {
-      setSelectedWorkspace(workspaces[0]);
-      return workspaces[0];
-    }
-    if (!creatingWorkspaceRef.current) {
-      creatingWorkspaceRef.current = createWorkspace("My first notebook").finally(() => {
-        creatingWorkspaceRef.current = null;
-      });
-    }
-    try {
-      return await creatingWorkspaceRef.current;
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not create notebook."));
-      return null;
-    }
-  }, [createWorkspace, selectedWorkspace, workspaces]);
-
-  const ensureChatSession = useCallback(async (): Promise<string | null> => {
-    const workspace = await ensureWorkspace();
-    if (!workspace) return null;
-    if (selectedSessionId) return selectedSessionId;
-    const existing = sessions.find((session) => session.workspace_id === workspace.id);
-    if (existing) {
-      setSelectedSessionId(existing.id);
-      return existing.id;
-    }
-    try {
-      const session = await handleCreateSession(workspace.id);
-      return session.id;
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not start Atlas AI."));
-      return null;
-    }
-  }, [ensureWorkspace, handleCreateSession, selectedSessionId, sessions]);
-
-  const openAddSource = useCallback(async () => {
-    const workspace = await ensureWorkspace();
-    if (workspace) setShowAddSource(true);
-  }, [ensureWorkspace]);
-
-  const openDeepResearch = useCallback(async () => {
-    const workspace = await ensureWorkspace();
-    if (workspace) setDeepResearchOpen(true);
-  }, [ensureWorkspace]);
-
-  const openNotes = useCallback(async () => {
-    const workspace = await ensureWorkspace();
-    if (workspace) setView("notes");
-  }, [ensureWorkspace]);
-
-  const openCanvas = useCallback(async () => {
-    const workspace = await ensureWorkspace();
-    if (workspace) setView("canvas");
-  }, [ensureWorkspace]);
-
-  const handleDeleteDocument = async (documentId: string) => {
-    try {
-      await apiClient.del(`/api/v1/documents/${documentId}`);
-      setSources((prev) => prev.filter((source) => source.id !== documentId));
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not delete source."));
-    }
-  };
-
-  const handleSaveNotesAsSource = async () => {
-    if (!notes.trim()) return;
-    const workspace = await ensureWorkspace();
     if (!workspace) return;
-    setNotesSaving(true);
-    try {
-      await apiClient.post(`/api/v1/workspaces/${workspace.id}/documents/text`, {
-        title: `Notebook notes - ${new Date().toLocaleDateString()}`,
-        content: notes.trim(),
+    const timer = window.setTimeout(() => {
+      void Promise.all([loadSources(workspace.id), loadOutputs(workspace.id)]).catch((caught) => {
+        setError(errorMessage(caught, "Atlas could not load this workspace."));
       });
-      await fetchDocuments(workspace.id);
-      setUiError("");
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not add notes as a source."));
-    } finally {
-      setNotesSaving(false);
-    }
-  };
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadOutputs, loadSources, workspace]);
 
-  const handleSendChatMessage = async (event?: React.FormEvent, promptOverride?: string) => {
-    event?.preventDefault();
-    const query = (promptOverride || chatInput).trim();
-    if (!query || chatLoading) return;
-    const sessionId = await ensureChatSession();
+  useEffect(() => {
+    if (!workspace || !processingSources.length) return;
+    const timer = window.setInterval(() => {
+      void loadSources(workspace.id);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [loadSources, processingSources.length, workspace]);
+
+  useEffect(() => {
+    if (!workspace || !outputs.some((output) => output.status === "pending" || output.status === "processing")) return;
+    const timer = window.setInterval(() => {
+      void loadOutputs(workspace.id);
+    }, 3500);
+    return () => window.clearInterval(timer);
+  }, [loadOutputs, outputs, workspace]);
+
+  useEffect(() => {
     if (!sessionId) return;
+    void apiClient.get<{ messages?: Array<{ id: string; role: string; content: string; citations?: unknown }> }>(`/api/v1/sessions/${sessionId}`)
+      .then((data) => setMessages((data.messages || []).map((message) => ({
+        id: message.id,
+        role: message.role === "user" ? "user" : "assistant",
+        content: message.content,
+        citations: messageCitations(message.citations),
+      }))))
+      .catch((caught) => setError(errorMessage(caught, "Atlas could not load this conversation.")));
+  }, [sessionId]);
 
-    setChatInput("");
-    setChatLoading(true);
-    setStreamingText("");
-    streamingAccumRef.current = "";
-    citationsMapRef.current = {};
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: query,
-      },
-    ]);
-
+  const sendMessage = useCallback(async (event?: FormEvent, prompt?: string) => {
+    event?.preventDefault();
+    const content = (prompt || input).trim();
+    if (!content || loading || !workspace) return;
+    setInput("");
+    setError("");
+    setNotice("");
+    setLoading(true);
+    setStreaming("");
+    setStreamingHasSources(false);
+    citationMapRef.current = {};
+    setCitationMap({});
+    const userMessage: Message = { id: crypto.randomUUID(), role: "user", content };
+    setMessages((current) => [...current, userMessage]);
     try {
-      const response = await apiClient.stream(`/api/v1/sessions/${sessionId}/chat/stream`, {
-        content: query,
-        synthesis_node_id: activeScopeNode?.id || null,
+      const activeSessionId = await ensureSession(workspace.id);
+      const response = await apiClient.stream(`/api/v1/sessions/${activeSessionId}/chat/stream`, {
+        content,
+        mode: answerMode,
       });
-
       const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response stream.");
+      if (!reader) throw new Error("Atlas did not return a readable response.");
       const decoder = new TextDecoder();
       let buffer = "";
-
-      while (true) {
+      let accumulated = "";
+      let finished = false;
+      while (!finished) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-
         for (const line of lines) {
-          const cleanLine = line.trim();
-          if (!cleanLine.startsWith("data: ")) continue;
-          const dataStr = cleanLine.slice(6).trim();
-          if (dataStr === "[DONE]") break;
-          let payload: any;
-          try {
-            payload = JSON.parse(dataStr);
-          } catch (err) {
-            console.error("Stream parse failed", err);
-            continue;
+          const clean = line.trim();
+          if (!clean.startsWith("data: ")) continue;
+          const raw = clean.slice(6);
+          if (raw === "[DONE]") {
+            finished = true;
+            break;
           }
-          if (payload.type === "metadata") {
-            citationsMapRef.current = payload.sources || {};
-            setCitationsMap(payload.sources || {});
-          } else if (payload.type === "chunk") {
-            streamingAccumRef.current += payload.content || "";
-            setStreamingText(streamingAccumRef.current);
-          } else if (payload.type === "error" || payload.error) {
-            throw new Error(payload.error || payload.content || "Atlas AI could not complete that request.");
+          try {
+            const payload = JSON.parse(raw) as {
+              type?: string;
+              content?: string;
+              sources?: Record<string, Citation>;
+              has_source_context?: boolean;
+            };
+            if (payload.type === "metadata" && payload.sources) {
+              citationMapRef.current = payload.sources;
+              setCitationMap(payload.sources);
+            }
+            if (payload.type === "metadata") {
+              setStreamingHasSources(Boolean(payload.has_source_context));
+            }
+            if (payload.type === "chunk") {
+              accumulated += payload.content || "";
+              setStreaming(accumulated);
+            }
+          } catch {
+            // Ignore partial SSE frames and keep reading.
           }
         }
       }
-
-      const finalContent = streamingAccumRef.current.trim() || "Atlas AI did not return a response. Please try again.";
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: finalContent,
-          citations: Object.values(citationsMapRef.current),
-        },
-      ]);
-      setStreamingText("");
-      setUiError("");
-    } catch (err) {
-      const message = getErrorMessage(err, "Atlas AI could not complete that request.");
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: message,
-        },
-      ]);
-      setUiError(message);
+      const assistant = accumulated.trim() || "Atlas did not return an answer. Try asking in a different way.";
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: assistant,
+        citations: Object.values(citationMapRef.current),
+      }]);
+      setStreaming("");
+      setStreamingHasSources(Object.keys(citationMapRef.current).length > 0);
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not answer that question."));
+      setStreaming("");
     } finally {
-      setChatLoading(false);
+      setLoading(false);
+    }
+  }, [answerMode, ensureSession, input, loading, workspace]);
+
+  const handleFiles = async (files: FileList | null) => {
+    if (!files || !workspace) return;
+    setSourceBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      for (const file of Array.from(files)) {
+        const form = new FormData();
+        form.append("file", file);
+        await apiClient.postForm<Source>(`/api/v1/workspaces/${workspace.id}/documents`, form);
+      }
+      setNotice(`${files.length} source${files.length === 1 ? "" : "s"} added. Atlas is indexing the material now.`);
+      await loadSources(workspace.id);
+      setShowSourceComposer(false);
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not add that source."));
+    } finally {
+      setSourceBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
-  const pollStudioOutput = (outputId: string, workspaceId?: string) => {
-    const id = workspaceId || selectedWorkspace?.id;
-    if (!id) return;
-    const interval = setInterval(async () => {
-      try {
-        const output = await apiClient.get<StudioOutput>(`/api/v1/workspaces/${id}/studio/${outputId}`);
-        setStudioOutputs((prev) => prev.map((item) => (item.id === output.id ? output : item)));
-        setOpenOutput((current) => (current?.id === output.id ? output : current));
-        if (output.status === "ready" || output.status === "failed") clearInterval(interval);
-      } catch (err) {
-        console.error("Studio polling failed", err);
-        clearInterval(interval);
-      }
-    }, 1600);
+  const handleUrl = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!workspace || !sourceInput.trim()) return;
+    setSourceBusy(true);
+    setError("");
+    try {
+      const isYoutube = /(?:youtube\.com|youtu\.be)/i.test(sourceInput);
+      const path = isYoutube
+        ? `/api/v1/workspaces/${workspace.id}/documents/youtube`
+        : `/api/v1/workspaces/${workspace.id}/documents/url`;
+      await apiClient.post<Source>(path, { url: sourceInput.trim() });
+      setNotice("Source added. Atlas is preparing it for grounded answers.");
+      setSourceInput("");
+      await loadSources(workspace.id);
+      setShowSourceComposer(false);
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not reach that link."));
+    } finally {
+      setSourceBusy(false);
+    }
   };
 
-  const generateStudioOutput = async (outputType: StudioOutput["output_type"]) => {
-    const workspace = await ensureWorkspace();
-    if (!workspace) return;
-    if (readySources.length === 0) {
-      setUiError("Add a source first, then AtlasLM can generate cited outputs.");
-      await openAddSource();
+  const handleText = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!workspace || !sourceText.trim() || !sourceTextTitle.trim()) return;
+    setSourceBusy(true);
+    setError("");
+    try {
+      await apiClient.post<Source>(`/api/v1/workspaces/${workspace.id}/documents/text`, {
+        title: sourceTextTitle.trim(),
+        content: sourceText.trim(),
+      });
+      setNotice("Your notes are now part of the Atlas knowledge base.");
+      setSourceTextTitle("");
+      setSourceText("");
+      await loadSources(workspace.id);
+      setShowSourceComposer(false);
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not add that text."));
+    } finally {
+      setSourceBusy(false);
+    }
+  };
+
+  const deleteSource = async (sourceId: string) => {
+    try {
+      await apiClient.del(`/api/v1/documents/${sourceId}`);
+      setSources((current) => current.filter((source) => source.id !== sourceId));
+      setNotice("Source removed from this workspace.");
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not remove that source."));
+    }
+  };
+
+  const openSourcePreview = async (source: Source) => {
+    setSelectedSource(source);
+    setSourcePreview(null);
+    setPreviewLoading(true);
+    try {
+      const preview = await apiClient.get<SourcePreview>(`/api/v1/documents/${source.id}/preview`);
+      setSourcePreview(preview);
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not open the indexed source text."));
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const createOutput = async (type: StudioOutput["output_type"]) => {
+    if (!workspace || !readySources.length) {
+      setError("Add and finish indexing at least one source before creating a study tool.");
+      setPanel("sources");
       return;
     }
-
+    setGeneratingOutput(type);
+    setError("");
     try {
-      const response = await apiClient.postRaw(`/api/v1/workspaces/${workspace.id}/studio`, {
-        output_type: outputType,
-        synthesis_node_id: activeScopeNode?.id || null,
+      const output = await apiClient.post<StudioOutput>(`/api/v1/workspaces/${workspace.id}/studio`, {
+        output_type: type,
+        title: `Atlas ${outputLabel(type)}`,
+        source_ids: readySources.map((source) => source.id),
+        length: "standard",
       });
-      const body = await response.json();
-      if (!response.ok) {
-        setUiError(body.detail || "Could not generate this output.");
-        return;
-      }
-      setStudioOutputs((prev) => [body, ...prev]);
-      setOpenOutput(body);
-      setView("studio");
-      pollStudioOutput(body.id, workspace.id);
-      setUiError("");
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not generate this output."));
+      setOutputs((current) => [output, ...current.filter((item) => item.id !== output.id)]);
+      setSelectedOutput(output);
+      setPanel("outputs");
+      setNotice(output.status === "ready"
+        ? `${outputLabel(type)} is ready. Open it here to use it.`
+        : `${outputLabel(type)} is queued. Atlas will show the result here when it finishes.`);
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not create that output."));
+    } finally {
+      setGeneratingOutput(null);
     }
   };
 
-  const handleDeleteStudioOutput = async (outputId: string) => {
-    if (!selectedWorkspace) return;
+  const createAudio = async () => {
+    setNotice("Audio overview will be enabled after the Report milestone.");
+    setPanel("outputs");
+  };
+
+  const handleAction = (action: (typeof ACTIONS)[number]) => {
+    if (action.available === false) {
+      setNotice(action.unavailableReason || "This Atlas capability is not enabled yet.");
+      setPanel("outputs");
+      return;
+    }
+    if (action.studio) {
+      void createOutput(action.studio);
+      return;
+    }
+    if (action.prompt) {
+      setPanel("workspace");
+      setInput(action.prompt);
+      window.setTimeout(() => void sendMessage(undefined, action.prompt), 0);
+    }
+  };
+
+  const createNewWorkspace = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!newWorkspaceName.trim()) return;
     try {
-      await apiClient.del(`/api/v1/workspaces/${selectedWorkspace.id}/studio/${outputId}`);
-      setStudioOutputs((prev) => prev.filter((output) => output.id !== outputId));
-      setOpenOutput((current) => (current?.id === outputId ? null : current));
-    } catch (err) {
-      setUiError(getErrorMessage(err, "Could not delete Studio output."));
+      await createWorkspace(newWorkspaceName.trim());
+      setNewWorkspaceName("");
+      setShowWorkspaceMenu(false);
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not create that workspace."));
     }
   };
 
-  const renderMessageContent = (content: string, msgCitations?: any[]) => {
-    const parts = content.split(/(\[source_\d+\])/g);
-    return parts.map((part, idx) => {
-      const match = part.match(/\[source_(\d+)\]/);
-      if (!match) return <span key={idx}>{part}</span>;
-      const tag = `source_${match[1]}`;
-      const sourceDetails =
-        (msgCitations && msgCitations.find((citation: any) => citation.tag === tag)) ||
-        citationsMap[tag] ||
-        null;
-      const isYoutube =
-        sourceDetails?.file_type === "youtube" ||
-        (sourceDetails?.filename && sourceDetails.filename.endsWith(" (YouTube)"));
-      let chipText = match[1];
-      if (isYoutube && sourceDetails) {
-        const ts = extractYoutubeTimestamp(sourceDetails.content || sourceDetails.text || "");
-        if (ts) chipText = `@ ${ts}`;
-      }
+  const renderOutputContent = (output: StudioOutput) => {
+    if (output.output_type === "report" && typeof output.content === "string") {
+      const citations = output.citations || [];
+      return <div className="output-report-markdown">{output.content.split(/(\[source_\d+\])/g).map((part, index) => {
+        const match = part.match(/^\[source_(\d+)\]$/);
+        if (!match) return <span key={index}>{part}</span>;
+        const citation = citations[Number(match[1]) - 1];
+        return <button type="button" className="citation-chip" key={index} onClick={() => citation && setSelectedCitation(citation)} disabled={!citation}><Quote size={12} /> {citation?.filename || `Source ${match[1]}`}</button>;
+      })}</div>;
+    }
+    if (typeof output.content === "string") {
+      return <pre className="output-markdown">{output.content}</pre>;
+    }
+    const content = output.content || {};
+    const records = (value: unknown): Array<Record<string, unknown>> => (
+      Array.isArray(value)
+        ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        : []
+    );
+    const strings = (value: unknown): string[] => (
+      Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
+    );
 
+    if (output.output_type === "study_guide") {
+      return <div className="structured-output study-guide-output">{records(content.sections).map((section, index) => <article className="output-section" key={index}><span className="output-section-number">{String(index + 1).padStart(2, "0")}</span><div><h3>{String(section.heading || "Section")}</h3><p>{String(section.summary || "")}</p>{strings(section.key_points).length > 0 && <ul>{strings(section.key_points).map((point, pointIndex) => <li key={pointIndex}>{point}</li>)}</ul>}</div></article>)}</div>;
+    }
+    if (output.output_type === "flashcards") {
+      return <div className="flashcards-output">{records(content.cards).map((card, index) => <article className="flashcard" key={index}><span>Card {index + 1}</span><strong>{String(card.front || "Question")}</strong><p>{String(card.back || "Answer")}</p></article>)}</div>;
+    }
+    if (output.output_type === "quiz") {
+      return <div className="quiz-output">{records(content.questions).map((question, index) => { const choices = strings(question.choices); const answerIndex = Number(question.answer_index); return <article className="quiz-question" key={index}><span>Question {index + 1}</span><h3>{String(question.question || "")}</h3><div className="quiz-choices">{choices.map((choice, choiceIndex) => <div className={choiceIndex === answerIndex ? "correct" : ""} key={choiceIndex}><b>{String.fromCharCode(65 + choiceIndex)}</b>{choice}{choiceIndex === answerIndex && <Check size={14} />}</div>)}</div><p className="quiz-explanation">{String(question.explanation || "")}</p></article>; })}</div>;
+    }
+    if (output.output_type === "mind_map") {
+      return <div className="mind-map-output"><div className="mind-map-root"><Sparkles size={16} /> {String(content.root || "Source map")}</div><div className="mind-map-branches">{records(content.branches).map((branch, index) => <article key={index}><strong>{String(branch.label || "Branch")}</strong>{strings(branch.children).map((child, childIndex) => <span key={childIndex}>{child}</span>)}</article>)}</div></div>;
+    }
+    return <pre className="output-markdown">{JSON.stringify(content, null, 2)}</pre>;
+  };
+
+  const renderMessage = (message: Message) => {
+    const parts = message.content.split(/(\[source_\d+\])/g);
+    const citations = message.citations || [];
+    return parts.map((part, index) => {
+      const match = part.match(/^\[source_(\d+)\]$/);
+      if (!match) return <span key={`${message.id}-${index}`}>{part}</span>;
+      const citation = citations[Number(match[1])] || citationMap[`source_${match[1]}`];
       return (
         <button
-          key={idx}
+          key={`${message.id}-${index}`}
           type="button"
-          onClick={() => sourceDetails && setSelectedCitation(sourceDetails)}
-          className="mx-1 inline-flex h-5 items-center rounded border border-emerald-400/25 bg-emerald-400/10 px-1.5 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-400/20"
+          className="citation-chip"
+          onClick={() => citation && setSelectedCitation(citation)}
+          disabled={!citation}
         >
-          {chipText}
+          <Quote size={12} /> {citation?.filename || `Source ${Number(match[1]) + 1}`}
         </button>
       );
     });
   };
 
-  const renderOutputPreview = (output: StudioOutput | null) => {
-    if (!output) {
-      return (
-        <div className="flex h-full min-h-[280px] items-center justify-center rounded border border-dashed border-zinc-800 bg-zinc-950/40 text-sm text-zinc-500">
-          Select or generate an output.
-        </div>
-      );
-    }
-    if (output.status === "pending" || output.status === "processing") {
-      return (
-        <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 rounded border border-zinc-800 bg-zinc-950/60">
-          <Loader2 className="h-6 w-6 animate-spin text-emerald-300" />
-          <span className="text-sm text-zinc-300">Generating {outputLabel(output.output_type)}</span>
-        </div>
-      );
-    }
-    if (output.status === "failed") {
-      return (
-        <div className="rounded border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-          {output.error || output.error_message || "Generation failed."}
-        </div>
-      );
-    }
-
-    const content = output.content || {};
-    if (output.output_type === "mind_map") {
-      const branches = content.branches || [];
-      return (
-        <div className="space-y-4">
-          <div className="rounded border border-sky-400/20 bg-sky-400/10 p-4">
-            <div className="text-xs uppercase tracking-wide text-sky-200">Root</div>
-            <div className="mt-1 text-lg font-semibold text-white">{content.root || output.title}</div>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            {branches.map((branch: any, index: number) => (
-              <div key={index} className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
-                <div className="font-semibold text-zinc-100">{branch.label}</div>
-                <ul className="mt-3 space-y-2 text-sm text-zinc-400">
-                  {(branch.children || []).map((child: string, childIndex: number) => (
-                    <li key={childIndex} className="flex gap-2">
-                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-300" />
-                      <span>{child}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    if (output.output_type === "study_guide") {
-      return (
-        <div className="space-y-3">
-          {(content.sections || []).map((section: any, index: number) => (
-            <div key={index} className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
-              <h3 className="font-semibold text-white">{section.heading}</h3>
-              <p className="mt-2 text-sm leading-6 text-zinc-400">{section.summary}</p>
-              <ul className="mt-3 space-y-2 text-sm text-zinc-300">
-                {(section.key_points || []).slice(0, 5).map((point: string, pointIndex: number) => (
-                  <li key={pointIndex} className="flex gap-2">
-                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300" />
-                    <span>{point}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    if (output.output_type === "quiz") {
-      return (
-        <div className="space-y-3">
-          {(content.questions || []).map((question: any, index: number) => (
-            <div key={index} className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
-              <div className="font-semibold text-white">{index + 1}. {question.question}</div>
-              <div className="mt-3 grid gap-2 md:grid-cols-2">
-                {(question.choices || []).map((choice: string, choiceIndex: number) => (
-                  <div
-                    key={choiceIndex}
-                    className={`rounded border px-3 py-2 text-sm ${
-                      choiceIndex === question.answer_index
-                        ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
-                        : "border-zinc-800 bg-zinc-900/40 text-zinc-400"
-                    }`}
-                  >
-                    {choice}
-                  </div>
-                ))}
-              </div>
-              {question.explanation && <p className="mt-3 text-sm text-zinc-500">{question.explanation}</p>}
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    if (output.output_type === "flashcards") {
-      return (
-        <div className="grid gap-3 md:grid-cols-2">
-          {(content.cards || []).map((card: any, index: number) => (
-            <div key={index} className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
-              <div className="text-xs uppercase tracking-wide text-violet-200">Prompt</div>
-              <div className="mt-1 font-semibold text-white">{card.front}</div>
-              <div className="mt-4 text-xs uppercase tracking-wide text-emerald-200">Answer</div>
-              <p className="mt-1 text-sm leading-6 text-zinc-400">{card.back}</p>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    return <pre className="overflow-auto rounded border border-zinc-800 bg-zinc-950 p-4 text-xs text-zinc-300">{JSON.stringify(content, null, 2)}</pre>;
-  };
-
-  const renderAskEmptyState = () => {
-    if (readySources.length === 0) {
-      return (
-        <div className="mx-auto grid max-w-4xl gap-5 pt-8">
-          <div className="rounded border border-zinc-800 bg-zinc-950/70 p-6">
-            <div className="flex items-start gap-4">
-              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
-                <Sparkles className="h-6 w-6" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Personal source expert</p>
-                <h1 className="mt-2 text-2xl font-semibold text-white">Add your material, then ask AtlasLM.</h1>
-                <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
-                  This notebook answers from your PDFs, notes, websites, and videos. Once a source is indexed, every answer can point back to the material it used.
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              <button
-                type="button"
-                onClick={openAddSource}
-                className="rounded border border-zinc-700 bg-zinc-100 p-4 text-left text-zinc-950 hover:bg-white"
-              >
-                <Upload className="h-5 w-5" />
-                <div className="mt-3 text-sm font-semibold">Add files or links</div>
-                <p className="mt-1 text-xs leading-5 text-zinc-600">Upload PDFs, paste URLs, or bring in video transcripts.</p>
-              </button>
-              <button
-                type="button"
-                onClick={openDeepResearch}
-                className="rounded border border-sky-400/20 bg-sky-400/10 p-4 text-left text-sky-100 hover:bg-sky-400/15"
-              >
-                <Search className="h-5 w-5" />
-                <div className="mt-3 text-sm font-semibold text-white">Discover sources</div>
-                <p className="mt-1 text-xs leading-5 text-sky-100/70">Use the agent to find relevant sources and ingest the useful ones.</p>
-              </button>
-              <button
-                type="button"
-                onClick={openNotes}
-                className="rounded border border-violet-400/20 bg-violet-400/10 p-4 text-left text-violet-100 hover:bg-violet-400/15"
-              >
-                <BookOpen className="h-5 w-5" />
-                <div className="mt-3 text-sm font-semibold text-white">Start with notes</div>
-                <p className="mt-1 text-xs leading-5 text-violet-100/70">Draft notes here and add them as a grounded source.</p>
-              </button>
-            </div>
-          </div>
-
-          <div className="rounded border border-zinc-800 bg-zinc-950/60 p-5">
-            <h2 className="text-sm font-semibold text-white">What unlocks after indexing</h2>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              {[
-                ["Grounded Q&A", "Ask questions with inline source citations."],
-                ["Studio outputs", "Generate study guides, quizzes, flashcards, and maps."],
-                ["Audio overview", "Create a spoken summary from selected sources."],
-                ["Living notebook", "Keep notes and generated artifacts next to the source set."],
-              ].map(([title, body]) => (
-                <div key={title} className="flex gap-3">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
-                  <div>
-                    <div className="text-sm font-medium text-zinc-100">{title}</div>
-                    <div className="mt-1 text-xs leading-5 text-zinc-500">{body}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="mx-auto flex max-w-3xl flex-col gap-5 pt-12">
-        <div className="rounded border border-zinc-800 bg-zinc-950/70 p-5">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
-              <Sparkles className="h-5 w-5" />
-            </span>
-            <div>
-              <h1 className="text-xl font-semibold text-white">Ask this notebook</h1>
-              <p className="mt-1 text-sm text-zinc-500">Answers stay grounded in {readySources.length} ready source{readySources.length === 1 ? "" : "s"}.</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid gap-2 md:grid-cols-2">
-          {SUGGESTED_PROMPTS.map((prompt) => (
-            <button
-              key={prompt}
-              type="button"
-              onClick={() => handleSendChatMessage(undefined, prompt)}
-              disabled={chatLoading}
-              className="rounded border border-zinc-800 bg-zinc-950/70 p-4 text-left text-sm text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {prompt}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  const renderSourceMap = () => {
-    if (!selectedWorkspace) {
-      return <div className="flex h-full items-center justify-center text-sm text-zinc-500">Select a notebook</div>;
-    }
-
-    const visibleSources = sources.slice(0, 7);
-    const visibleOutputs = studioOutputs.slice(0, 5);
-    const hasSources = sources.length > 0;
-
-    return (
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="flex shrink-0 items-center justify-between border-b border-zinc-900 px-5 py-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Source map</p>
-            <h1 className="mt-1 text-xl font-semibold text-white">{selectedWorkspace.name}</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={openAddSource}
-              className="flex h-9 items-center gap-2 rounded bg-zinc-100 px-3 text-sm font-semibold text-zinc-950 hover:bg-white"
-            >
-              <Upload className="h-4 w-4" />
-              Add source
-            </button>
-            <button
-              type="button"
-              onClick={() => setView("ask")}
-              className="flex h-9 items-center gap-2 rounded border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-200 hover:bg-zinc-900"
-            >
-              <MessageSquare className="h-4 w-4" />
-              Ask
-            </button>
-          </div>
-        </div>
-
-        <div className="grid min-h-0 flex-1 gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_290px]">
-          <div
-            className="relative min-h-[520px] overflow-y-auto overflow-x-hidden rounded border border-zinc-800 bg-[#08090b]"
-            style={{
-              backgroundImage: "radial-gradient(circle at 1px 1px, rgba(113,113,122,0.22) 1px, transparent 0)",
-              backgroundSize: "28px 28px",
-            }}
-          >
-            {!hasSources ? (
-              <div className="flex h-full min-h-[520px] flex-col items-center justify-center px-6 text-center">
-                <span className="flex h-14 w-14 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
-                  <Network className="h-7 w-7" />
-                </span>
-                <h2 className="mt-5 text-2xl font-semibold text-white">Your map starts with sources.</h2>
-                <p className="mt-3 max-w-md text-sm leading-6 text-zinc-400">
-                  Add at least one document, note, URL, or video. AtlasLM will turn it into a navigable research graph and cited assistant context.
-                </p>
-                <div className="mt-6 flex flex-wrap justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={openAddSource}
-                    className="flex h-10 items-center gap-2 rounded bg-zinc-100 px-4 text-sm font-semibold text-zinc-950 hover:bg-white"
-                  >
-                    <Upload className="h-4 w-4" />
-                    Add source
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openDeepResearch}
-                    className="flex h-10 items-center gap-2 rounded border border-sky-400/20 bg-sky-400/10 px-4 text-sm font-semibold text-sky-100 hover:bg-sky-400/15"
-                  >
-                    <Search className="h-4 w-4" />
-                    Discover
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="grid min-h-[520px] grid-cols-1 gap-5 p-5 2xl:grid-cols-[minmax(180px,1fr)_220px_minmax(180px,1fr)] 2xl:p-6">
-                <div className="flex min-w-0 flex-col gap-3 2xl:justify-center">
-                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Sources</div>
-                  {visibleSources.map((source) => {
-                    const Icon = sourceIcon(source.file_type);
-                    const isBusy = source.status === "pending" || source.status === "processing";
-                    return (
-                      <div key={source.id} className="rounded border border-zinc-800 bg-zinc-950/90 p-3 shadow-lg shadow-black/20">
-                        <div className="flex items-center gap-3">
-                          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded border ${sourceTone(source.file_type)}`}>
-                            {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
-                          </span>
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-white" title={source.filename}>{source.filename}</div>
-                            <div className="mt-1 text-[11px] uppercase tracking-wide text-zinc-500">{source.file_type} - {source.status}</div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {sources.length > visibleSources.length && (
-                    <div className="rounded border border-dashed border-zinc-800 bg-zinc-950/50 p-3 text-xs text-zinc-500">
-                      +{sources.length - visibleSources.length} more sources in this notebook
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex min-w-0 items-center justify-center">
-                  <div className="w-full rounded border border-emerald-400/25 bg-emerald-400/10 p-5 text-center">
-                    <Sparkles className="mx-auto h-7 w-7 text-emerald-200" />
-                    <div className="mt-3 text-base font-semibold text-white">AtlasLM Notebook</div>
-                    <div className="mt-2 text-xs leading-5 text-emerald-100/70">
-                      {readySources.length} ready / {processingSources.length} indexing / {failedSources.length} failed
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setView("ask")}
-                      className="mt-4 h-9 rounded bg-emerald-300 px-3 text-sm font-semibold text-zinc-950 hover:bg-emerald-200"
-                    >
-                      Ask all sources
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex min-w-0 flex-col gap-3 2xl:justify-center">
-                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Outputs</div>
-                  {visibleOutputs.length > 0 ? (
-                    visibleOutputs.map((output) => (
-                      <button
-                        key={output.id}
-                        type="button"
-                        onClick={() => {
-                          setOpenOutput(output);
-                          setView("studio");
-                        }}
-                        className="min-w-0 rounded border border-zinc-800 bg-zinc-950/90 p-3 text-left hover:bg-zinc-900"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-white">{output.title}</div>
-                            <div className="mt-1 text-[11px] uppercase tracking-wide text-zinc-500">{outputLabel(output.output_type)} - {output.status}</div>
-                          </div>
-                          {output.status === "ready" ? (
-                            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-300" />
-                          ) : output.status === "failed" ? (
-                            <AlertTriangle className="h-4 w-4 shrink-0 text-red-300" />
-                          ) : (
-                            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-300" />
-                          )}
-                        </div>
-                      </button>
-                    ))
-                  ) : (
-                    STUDIO_CARDS.slice(0, 3).map((card) => {
-                      const Icon = card.icon;
-                      return (
-                        <button
-                          key={card.id}
-                          type="button"
-                          onClick={() => generateStudioOutput(card.id)}
-                          className="min-w-0 rounded border border-zinc-800 bg-zinc-950/90 p-3 text-left hover:bg-zinc-900"
-                        >
-                          <Icon className="h-4 w-4 text-zinc-300" />
-                          <div className="mt-2 text-sm font-medium text-white">{card.label}</div>
-                          <div className="mt-1 text-xs text-zinc-500">Generate</div>
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="min-h-0 overflow-y-auto rounded border border-zinc-800 bg-zinc-950/60 p-4">
-            <h2 className="text-sm font-semibold text-white">Notebook workflow</h2>
-            <div className="mt-4 space-y-3">
-              {[
-                ["Add", "Bring in PDFs, URLs, YouTube, or text notes.", sources.length > 0],
-                ["Index", "AtlasLM chunks and embeds the material for retrieval.", readySources.length > 0],
-                ["Ask", "Chat answers are constrained to your sources.", messages.length > 0],
-                ["Generate", "Create study guides, quizzes, flashcards, and maps.", studioOutputs.length > 0],
-              ].map(([title, body, done]) => (
-                <div key={String(title)} className="flex gap-3 rounded border border-zinc-800 bg-zinc-950/80 p-3">
-                  {done ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
-                  ) : (
-                    <span className="mt-1 h-3 w-3 shrink-0 rounded-full border border-zinc-600" />
-                  )}
-                  <div>
-                    <div className="text-sm font-medium text-zinc-100">{title}</div>
-                    <div className="mt-1 text-xs leading-5 text-zinc-500">{body}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-4 grid grid-cols-3 gap-2">
-              <div className="rounded border border-zinc-800 bg-zinc-950 p-2 text-center">
-                <div className="text-lg font-semibold text-white">{readySources.length}</div>
-                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Ready</div>
-              </div>
-              <div className="rounded border border-zinc-800 bg-zinc-950 p-2 text-center">
-                <div className="text-lg font-semibold text-white">{processingSources.length}</div>
-                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Indexing</div>
-              </div>
-              <div className="rounded border border-zinc-800 bg-zinc-950 p-2 text-center">
-                <div className="text-lg font-semibold text-white">{studioOutputs.length}</div>
-                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Outputs</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-    );
-  };
-
-  const viewButton = (id: DashboardView, label: string, Icon: typeof MessageSquare) => (
-    <button
-      type="button"
-      onClick={() => {
-        if (id === "notes") {
-          void openNotes();
-          return;
-        }
-        if (id === "canvas") {
-          void openCanvas();
-          return;
-        }
-        setView(id);
-      }}
-      className={`flex h-9 items-center gap-2 rounded px-3 text-sm font-medium transition ${
-        view === id
-          ? "bg-zinc-100 text-zinc-950"
-          : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-      }`}
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </button>
-  );
-
   return (
-    <div className="flex h-screen min-h-[720px] flex-col overflow-hidden bg-[#08090b] text-zinc-100">
-      <header className="flex h-16 shrink-0 items-center justify-between border-b border-zinc-900 bg-[#0b0c0f] px-5">
-        <div className="flex items-center gap-4">
-          <Link href="/" className="flex items-center gap-3">
-            <Logo size={32} showText={false} />
-            <span className="text-sm font-semibold tracking-tight text-white">AtlasLM</span>
+    <div
+      className={`atlas-shell ${layout.source_panel_collapsed ? "source-panel-collapsed" : ""} ${layout.output_panel_collapsed ? "output-panel-collapsed" : ""}`}
+      style={{ "--atlas-source-panel-width": `${layout.source_panel_width}px`, "--atlas-output-panel-width": `${layout.output_panel_width}px` } as CSSProperties}
+    >
+      <aside className="atlas-sidebar">
+        <div className="atlas-brand-row">
+          <Link href="/" className="atlas-brand" aria-label="Atlas home">
+            <span className="atlas-brand-mark"><span /><span /><span /></span>
+            <span>Atlas <em>LM</em></span>
           </Link>
-          <div className="hidden h-6 w-px bg-zinc-800 md:block" />
-          <div className="hidden items-center gap-2 text-xs text-zinc-500 md:flex">
-            <Database className="h-3.5 w-3.5" />
-            <span>{selectedWorkspace?.name || "No notebook selected"}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="hidden items-center gap-2 rounded border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-300 sm:flex">
-            <span className={`h-2 w-2 rounded-full ${engineStatus === "active" ? "bg-emerald-400" : engineStatus === "loading" ? "bg-amber-300" : "bg-zinc-600"}`} />
-            <span>{engineStatus === "active" ? "AtlasLM Engine" : engineStatus === "loading" ? "Checking engine" : "Local Engine"}</span>
-          </div>
-          <button
-            type="button"
-            onClick={openDeepResearch}
-            className="hidden h-9 items-center gap-2 rounded border border-emerald-400/20 bg-emerald-400/10 px-3 text-sm font-medium text-emerald-100 hover:bg-emerald-400/15 md:flex"
-          >
-            <Sparkles className="h-4 w-4" />
-            Discover
+          <button type="button" className="layout-toggle" onClick={() => setLayout((current) => ({ ...current, source_panel_collapsed: !current.source_panel_collapsed }))} aria-label={layout.source_panel_collapsed ? "Restore source panel" : "Collapse source panel"}>
+            {layout.source_panel_collapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
           </button>
-          <UserMenu />
         </div>
-      </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)_360px] max-xl:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col border-r border-zinc-900 bg-[#0b0c0f]">
-          <div className="border-b border-zinc-900 p-4">
-            <form onSubmit={handleCreateWorkspace} className="flex gap-2">
-              <input
-                value={newWorkspaceName}
-                onChange={(event) => setNewWorkspaceName(event.target.value)}
-                placeholder="New notebook"
-                className="h-10 min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
-              />
-              <button
-                type="submit"
-                className="flex h-10 w-10 items-center justify-center rounded bg-zinc-100 text-zinc-950 hover:bg-white"
-                title="Create notebook"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
-            </form>
-          </div>
+        {!layout.source_panel_collapsed && <>
 
-          <div className="border-b border-zinc-900 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Notebooks</span>
-              <span className="rounded bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-500">{workspaces.length}</span>
-            </div>
-            <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
-              {workspaces.map((workspace) => (
-                <button
-                  key={workspace.id}
-                  type="button"
-                  onClick={() => setSelectedWorkspace(workspace)}
-                  className={`flex w-full items-center justify-between rounded border px-3 py-2 text-left text-sm transition ${
-                    selectedWorkspace?.id === workspace.id
-                      ? "border-zinc-700 bg-zinc-900 text-white"
-                      : "border-transparent text-zinc-400 hover:bg-zinc-900/70 hover:text-zinc-100"
-                  }`}
-                >
-                  <span className="truncate">{workspace.name}</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-zinc-600" />
+        <div className="workspace-switcher">
+          <button type="button" className="workspace-switcher-button" onClick={() => setShowWorkspaceMenu((value) => !value)}>
+            <span className="workspace-avatar">{workspace?.name.slice(0, 1).toUpperCase() || "A"}</span>
+            <span className="workspace-switcher-copy"><small>Workspace</small><strong>{workspace?.name || "Loading..."}</strong></span>
+            <ChevronDown size={15} />
+          </button>
+          {showWorkspaceMenu && (
+            <div className="workspace-menu">
+              {workspaces.map((item) => (
+                <button key={item.id} type="button" className={`workspace-menu-item ${workspace?.id === item.id ? "selected" : ""}`} onClick={() => { setWorkspaceAndPersist(item); setShowWorkspaceMenu(false); }}>
+                  <span>{item.name}</span>
+                  {workspace?.id === item.id && <Check size={14} />}
                 </button>
               ))}
-            </div>
-          </div>
-
-          <div className="flex min-h-0 flex-1 flex-col p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Sources</span>
-              <button
-                type="button"
-                onClick={openAddSource}
-                className="flex h-8 items-center gap-2 rounded bg-zinc-100 px-2.5 text-xs font-semibold text-zinc-950 hover:bg-white"
-              >
-                <Upload className="h-3.5 w-3.5" />
-                Add
-              </button>
-            </div>
-
-            <div className="relative mb-3">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
-              <input
-                value={sourceFilter}
-                onChange={(event) => setSourceFilter(event.target.value)}
-                placeholder="Search sources"
-                className="h-9 w-full rounded border border-zinc-800 bg-zinc-950 pl-9 pr-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
-              />
-            </div>
-
-            <div className="mb-3 grid grid-cols-3 gap-2">
-              <div className="rounded border border-zinc-800 bg-zinc-950 p-2">
-                <div className="text-base font-semibold text-white">{readySources.length}</div>
-                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Ready</div>
-              </div>
-              <div className="rounded border border-zinc-800 bg-zinc-950 p-2">
-                <div className="text-base font-semibold text-white">{processingSources.length}</div>
-                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Indexing</div>
-              </div>
-              <div className="rounded border border-zinc-800 bg-zinc-950 p-2">
-                <div className="text-base font-semibold text-white">{failedSources.length}</div>
-                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Failed</div>
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-              {filteredSources.length === 0 ? (
-                <div className="rounded border border-dashed border-zinc-800 bg-zinc-950/50 p-4 text-sm text-zinc-500">
-                  <FileText className="h-5 w-5 text-zinc-600" />
-                  <div className="mt-3 font-medium text-zinc-300">No sources yet</div>
-                  <p className="mt-1 text-xs leading-5">Add a document, URL, YouTube video, or note to wake up this notebook.</p>
-                  <button
-                    type="button"
-                    onClick={openAddSource}
-                    className="mt-4 flex h-8 items-center gap-2 rounded bg-zinc-100 px-3 text-xs font-semibold text-zinc-950 hover:bg-white"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    Add source
-                  </button>
-                </div>
-              ) : (
-                filteredSources.map((source) => {
-                  const Icon = sourceIcon(source.file_type);
-                  const isBusy = source.status === "pending" || source.status === "processing";
-                  return (
-                    <div key={source.id} className="group rounded border border-zinc-850 bg-zinc-950/70 p-3">
-                      <div className="flex items-start gap-3">
-                        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded border ${sourceTone(source.file_type)}`}>
-                          {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-zinc-100" title={source.filename}>{source.filename}</div>
-                          <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-500">
-                            <span className="uppercase">{source.file_type}</span>
-                            <span>{source.status}</span>
-                            <span>{formatDate(source.created_at)}</span>
-                          </div>
-                          {source.error_message && <div className="mt-1 text-[11px] text-red-300">{source.error_message}</div>}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteDocument(source.id)}
-                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-zinc-600 opacity-0 hover:bg-red-500/10 hover:text-red-300 group-hover:opacity-100"
-                          title="Delete source"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </aside>
-
-        <main className="flex min-h-0 flex-col bg-[#090a0d]">
-          <div className="flex shrink-0 items-center justify-between border-b border-zinc-900 px-5 py-3">
-            <div className="flex flex-wrap items-center gap-2">
-              {viewButton("ask", "Ask", MessageSquare)}
-              {viewButton("notes", "Notes", BookOpen)}
-              {viewButton("studio", "Studio", Wand2)}
-              {viewButton("canvas", "Map", Map)}
-              {viewButton("agent", "Agent", Bot)}
-            </div>
-            <div className="flex items-center gap-2 text-xs text-zinc-500">
-              <span className="rounded border border-zinc-800 bg-zinc-950 px-2 py-1">{userTier}</span>
-              <span>{readySources.length} ready sources</span>
-            </div>
-          </div>
-
-          {uiError && (
-            <div className="mx-5 mt-4 flex items-center gap-2 rounded border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span className="min-w-0 flex-1">{uiError}</span>
-              <button type="button" onClick={() => setUiError("")} className="text-red-200 hover:text-white">Dismiss</button>
+              <form className="new-workspace-form" onSubmit={createNewWorkspace}>
+                <input value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="New workspace" />
+                <button type="submit" aria-label="Create workspace"><Plus size={15} /></button>
+              </form>
             </div>
           )}
-
-          {view === "ask" && (
-            <section className="flex min-h-0 flex-1 flex-col">
-              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-                {activeScopeNode && (
-                  <div className="mb-4 inline-flex items-center gap-2 rounded border border-violet-400/20 bg-violet-400/10 px-3 py-1.5 text-xs text-violet-100">
-                    <span>{activeScopeNode.title}</span>
-                    <span className="text-violet-300">{activeScopeNode.count} sources</span>
-                    <button type="button" onClick={() => setActiveScopeNode(null)} className="text-violet-200 hover:text-white">Clear</button>
-                  </div>
-                )}
-
-                {messages.length === 0 && !streamingText ? (
-                  renderAskEmptyState()
-                ) : (
-                  <div className="mx-auto flex max-w-4xl flex-col overflow-hidden rounded border border-zinc-900 bg-zinc-950/30">
-                    {messages.map((message) => {
-                      const isUser = message.role === "user";
-                      return (
-                        <div key={message.id} className="border-b border-zinc-900 p-4 last:border-b-0">
-                          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                            <span className={`h-2 w-2 rounded-full ${isUser ? "bg-zinc-400" : "bg-emerald-300"}`} />
-                            {isUser ? "You" : "Atlas AI"}
-                          </div>
-                          <div className="text-sm leading-6 text-zinc-100">
-                            {isUser ? message.content : renderMessageContent(message.content, message.citations)}
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {streamingText && (
-                      <div className="border-b border-zinc-900 p-4 last:border-b-0">
-                        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                          <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                          Atlas AI
-                        </div>
-                        <div className="text-sm leading-6 text-zinc-100">
-                          {renderMessageContent(streamingText)}
-                          <span className="ml-1 inline-block h-4 w-1 animate-pulse bg-emerald-300 align-middle" />
-                        </div>
-                      </div>
-                    )}
-                    <div ref={messagesEndRef} />
-                  </div>
-                )}
-              </div>
-
-              <div className="shrink-0 border-t border-zinc-900 bg-[#0b0c0f] p-4">
-                <form onSubmit={(event) => handleSendChatMessage(event)} className="mx-auto max-w-4xl rounded border border-zinc-800 bg-zinc-950/80 p-3">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-8 w-8 items-center justify-center rounded border border-emerald-400/20 bg-emerald-400/10 text-emerald-200">
-                        <Bot className="h-4 w-4" />
-                      </span>
-                      <div>
-                        <div className="text-sm font-semibold text-white">Atlas AI</div>
-                        <div className="text-xs text-zinc-500">
-                          {readySources.length > 0 ? "Ask across this notebook with citations." : "Say hi now, or add sources for grounded answers."}
-                        </div>
-                      </div>
-                    </div>
-                    <span className="hidden rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-500 sm:inline">
-                      {readySources.length} sources
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <input
-                      value={chatInput}
-                      onChange={(event) => setChatInput(event.target.value)}
-                      disabled={chatLoading}
-                      placeholder={readySources.length === 0 ? "Say hi, or add sources for grounded questions" : "Ask Atlas AI a cited question"}
-                      className="h-12 min-w-0 flex-1 rounded border border-zinc-800 bg-[#090a0d] px-4 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600 disabled:opacity-50"
-                    />
-                    <button
-                      type="submit"
-                      disabled={chatLoading || !chatInput.trim()}
-                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-emerald-300 text-zinc-950 hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
-                      title="Send"
-                    >
-                      {chatLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-                    </button>
-                  </div>
-                  {readySources.length === 0 && (
-                    <p className="mt-2 text-xs text-zinc-500">
-                      Atlas AI can greet you immediately. Source-grounded answers, Studio, and audio unlock after a source is indexed.
-                    </p>
-                  )}
-                </form>
-              </div>
-            </section>
-          )}
-
-          {view === "notes" && (
-            <section className="flex min-h-0 flex-1 flex-col p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <h1 className="text-xl font-semibold text-white">Notebook notes</h1>
-                  <p className="mt-1 text-sm text-zinc-500">Saved locally for this notebook.</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleSaveNotesAsSource}
-                  disabled={!notes.trim() || notesSaving}
-                  className="flex h-10 items-center gap-2 rounded bg-zinc-100 px-3 text-sm font-semibold text-zinc-950 hover:bg-white disabled:opacity-40"
-                >
-                  {notesSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                  Add as source
-                </button>
-              </div>
-              <textarea
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                className="min-h-0 flex-1 resize-none rounded border border-zinc-800 bg-zinc-950/70 p-5 text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
-                placeholder="Write research notes, open questions, and synthesis drafts."
-              />
-            </section>
-          )}
-
-          {view === "studio" && (
-            <section className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] gap-4 p-5 max-lg:grid-cols-1">
-              <div className="min-h-0 overflow-y-auto rounded border border-zinc-800 bg-zinc-950/60 p-4">
-                <div className="mb-4 flex items-center justify-between">
-                  <h1 className="text-lg font-semibold text-white">Studio</h1>
-                  <span className="text-xs text-zinc-500">{studioOutputs.length} outputs</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {STUDIO_CARDS.map((card) => {
-                    const Icon = card.icon;
-                    return (
-                      <button
-                        key={card.id}
-                        type="button"
-                        onClick={() => generateStudioOutput(card.id)}
-                        className={`rounded border p-3 text-left ${card.accent} hover:bg-opacity-20`}
-                      >
-                        <Icon className="h-4 w-4" />
-                        <div className="mt-2 text-sm font-semibold text-white">{card.label}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="mt-5 space-y-2">
-                  {studioOutputs.map((output) => (
-                    <button
-                      key={output.id}
-                      type="button"
-                      onClick={() => setOpenOutput(output)}
-                      className={`w-full rounded border p-3 text-left transition ${
-                        openOutput?.id === output.id ? "border-zinc-600 bg-zinc-900" : "border-zinc-800 bg-zinc-950 hover:bg-zinc-900/70"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-white">{output.title}</div>
-                          <div className="mt-1 text-[11px] uppercase tracking-wide text-zinc-500">{outputLabel(output.output_type)}</div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {(output.status === "pending" || output.status === "processing") && <Loader2 className="h-4 w-4 animate-spin text-amber-300" />}
-                          {output.status === "ready" && <CheckCircle2 className="h-4 w-4 text-emerald-300" />}
-                          {output.status === "failed" && <AlertTriangle className="h-4 w-4 text-red-300" />}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="min-h-0 overflow-y-auto rounded border border-zinc-800 bg-zinc-950/40 p-5">
-                <div className="mb-4 flex items-center justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-white">{openOutput?.title || "Output viewer"}</h2>
-                    {openOutput && <div className="mt-1 text-xs text-zinc-500">{outputLabel(openOutput.output_type)} - {openOutput.status}</div>}
-                  </div>
-                  {openOutput && (
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteStudioOutput(openOutput.id)}
-                      className="flex h-9 w-9 items-center justify-center rounded border border-zinc-800 text-zinc-500 hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-200"
-                      title="Delete output"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-                {renderOutputPreview(openOutput)}
-              </div>
-            </section>
-          )}
-
-          {view === "canvas" && (
-            renderSourceMap()
-          )}
-
-          {view === "agent" && (
-            <section className="min-h-0 flex-1 overflow-y-auto p-5">
-              <div className="grid gap-4 lg:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => setView("ask")}
-                  className="rounded border border-emerald-400/20 bg-emerald-400/10 p-5 text-left hover:bg-emerald-400/15"
-                >
-                  <Bot className="h-5 w-5 text-emerald-200" />
-                  <div className="mt-3 text-lg font-semibold text-white">Source expert</div>
-                  <div className="mt-2 text-sm text-zinc-400">Grounded Q&A, citations, scoped synthesis.</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={openDeepResearch}
-                  className="rounded border border-sky-400/20 bg-sky-400/10 p-5 text-left hover:bg-sky-400/15"
-                >
-                  <Search className="h-5 w-5 text-sky-200" />
-                  <div className="mt-3 text-lg font-semibold text-white">Source discovery</div>
-                  <div className="mt-2 text-sm text-zinc-400">Find sources, ingest selected results, continue in the notebook.</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setView("studio")}
-                  className="rounded border border-violet-400/20 bg-violet-400/10 p-5 text-left hover:bg-violet-400/15"
-                >
-                  <FileText className="h-5 w-5 text-violet-200" />
-                  <div className="mt-3 text-lg font-semibold text-white">Deliverable builder</div>
-                  <div className="mt-2 text-sm text-zinc-400">Reports, guides, quizzes, flashcards, maps.</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUiError("Short video briefs need the next video generation service. You can add video sources now.");
-                    void openAddSource();
-                  }}
-                  className="rounded border border-amber-400/20 bg-amber-400/10 p-5 text-left hover:bg-amber-400/15"
-                >
-                  <Video className="h-5 w-5 text-amber-200" />
-                  <div className="mt-3 text-lg font-semibold text-white">Video briefs</div>
-                  <div className="mt-2 text-sm text-zinc-400">Short video and narrated slide generation need the next backend service.</div>
-                </button>
-              </div>
-            </section>
-          )}
-        </main>
-
-        <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-zinc-900 bg-[#0b0c0f] p-4 max-xl:hidden">
-          <div className="rounded border border-zinc-800 bg-zinc-950/70 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold text-white">Notebook state</h2>
-                <p className="mt-1 text-xs text-zinc-500">{selectedWorkspace?.name || "No notebook"}</p>
-              </div>
-              <span className={`rounded px-2 py-1 text-[10px] font-semibold uppercase ${
-                engineStatus === "active" ? "bg-emerald-400/10 text-emerald-200" : "bg-zinc-800 text-zinc-400"
-              }`}>
-                {engineStatus === "active" ? "AI ready" : "Local"}
-              </span>
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-2">
-              <div>
-                <div className="text-xl font-semibold text-white">{sources.length}</div>
-                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Sources</div>
-              </div>
-              <div>
-                <div className="text-xl font-semibold text-white">{messages.length}</div>
-                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Messages</div>
-              </div>
-              <div>
-                <div className="text-xl font-semibold text-white">{studioOutputs.length}</div>
-                <div className="text-[10px] uppercase tracking-wide text-zinc-500">Outputs</div>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 rounded border border-zinc-800 bg-zinc-950/70 p-4">
-            <h2 className="text-sm font-semibold text-white">Generate</h2>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {STUDIO_CARDS.map((card) => {
-                const Icon = card.icon;
-                return (
-                  <button
-                    key={card.id}
-                    type="button"
-                    onClick={() => generateStudioOutput(card.id)}
-                    className="rounded border border-zinc-800 bg-zinc-900/40 p-3 text-left hover:bg-zinc-900"
-                  >
-                    <Icon className="h-4 w-4 text-zinc-300" />
-                    <div className="mt-2 text-xs font-semibold text-white">{card.label}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {selectedWorkspace && token && (
-            <div className="mt-4 rounded border border-zinc-800 bg-zinc-950/70 p-4">
-              <AudioOverviewPanel
-                workspaceId={selectedWorkspace.id}
-                token={token}
-                docIds={readySources.map((source) => source.id)}
-              />
-            </div>
-          )}
-
-          <div className="mt-4 rounded border border-zinc-800 bg-zinc-950/70 p-4">
-            <h2 className="text-sm font-semibold text-white">Agent actions</h2>
-            <div className="mt-3 space-y-2">
-              <button
-                type="button"
-                onClick={openDeepResearch}
-                className="flex w-full items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
-              >
-                <span className="flex items-center gap-2"><Search className="h-4 w-4" /> Discover sources</span>
-                <ChevronRight className="h-4 w-4 text-zinc-600" />
-              </button>
-              <button
-                type="button"
-                onClick={openNotes}
-                className="flex w-full items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
-              >
-                <span className="flex items-center gap-2"><BookOpen className="h-4 w-4" /> Open notes</span>
-                <ChevronRight className="h-4 w-4 text-zinc-600" />
-              </button>
-              <button
-                type="button"
-                onClick={openCanvas}
-                className="flex w-full items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900"
-              >
-                <span className="flex items-center gap-2"><Map className="h-4 w-4" /> Map sources</span>
-                <ChevronRight className="h-4 w-4 text-zinc-600" />
-              </button>
-            </div>
-          </div>
-        </aside>
-      </div>
-
-      {selectedCitation && (
-        <div className="fixed bottom-4 right-4 z-50 w-[420px] rounded border border-emerald-400/20 bg-[#0b0c0f] p-4 shadow-2xl shadow-black/60">
-          <div className="mb-3 flex items-center justify-between">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Citation</div>
-              <div className="mt-1 max-w-[340px] truncate text-sm font-medium text-white">
-                {selectedCitation.filename || "Source"}
-              </div>
-            </div>
-            <button type="button" onClick={() => setSelectedCitation(null)} className="text-zinc-500 hover:text-white">
-              Close
-            </button>
-          </div>
-          <div className="mb-3 text-xs text-zinc-500">
-            {selectedCitation.file_type === "youtube" && selectedCitation.source_url ? (
-              <a
-                href={`${selectedCitation.source_url}&t=${parseTimeToSeconds(extractYoutubeTimestamp(selectedCitation.content || selectedCitation.text || ""))}s`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-emerald-200 hover:underline"
-              >
-                Open video timestamp
-              </a>
-            ) : (
-              citationLabel({
-                page: selectedCitation.page_number,
-                sheet: selectedCitation.sheet,
-                timestamp: selectedCitation.timestamp,
-                origin: selectedCitation.origin,
-                source_label: selectedCitation.source_label,
-                external_url: selectedCitation.external_url,
-                venue: selectedCitation.venue,
-              })
-            )}
-          </div>
-          <p className="max-h-44 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-3 text-sm leading-6 text-zinc-300">
-            {selectedCitation.content || selectedCitation.text || "No source text available."}
-          </p>
         </div>
-      )}
 
-      {showAddSource && selectedWorkspace && (
-        <AddSourceModal
-          notebookId={selectedWorkspace.id}
-          token={token}
-          onClose={() => setShowAddSource(false)}
-          onAdded={() => {
-            setShowAddSource(false);
-            fetchDocuments(selectedWorkspace.id);
-          }}
-        />
-      )}
+        <nav className="atlas-nav" aria-label="Atlas workspace">
+          <button type="button" className={`atlas-nav-item ${panel === "workspace" ? "active" : ""}`} onClick={() => setPanel("workspace")}><Sparkles size={17} /><span>Ask Atlas</span><kbd>1</kbd></button>
+          <button type="button" className={`atlas-nav-item ${panel === "sources" ? "active" : ""}`} onClick={() => setPanel("sources")}><FolderOpen size={17} /><span>Sources</span><b>{sources.length}</b></button>
+          <button type="button" className={`atlas-nav-item ${panel === "outputs" ? "active" : ""}`} onClick={() => setPanel("outputs")}><WandSparkles size={17} /><span>Outputs</span><b>{outputs.length}</b></button>
+          <button type="button" className={`atlas-nav-item unavailable ${panel === "audio" ? "active" : ""}`} disabled title="Audio overview will be enabled after the Report milestone."><Headphones size={17} /><span>Audio overview</span><b>Planned</b></button>
+        </nav>
 
-      {deepResearchOpen && selectedWorkspace && (
-        <DeepResearchDrawer
-          open={deepResearchOpen}
-          onClose={() => setDeepResearchOpen(false)}
-          workspaceId={selectedWorkspace.id}
-          token={token}
-          onIngested={() => fetchDocuments(selectedWorkspace.id)}
-        />
-      )}
+        <div className="sidebar-source-note">
+          <div className="sidebar-note-orbit"><Sparkles size={15} /></div>
+          <strong>Your sources, one mind.</strong>
+          <p>Atlas connects documents, links, lectures, and research into one citable knowledge base.</p>
+        </div>
 
-      <OnboardingTour />
+        <div className="atlas-sidebar-footer">
+          <div className="engine-row"><span className={`engine-dot ${engine}`} /><span>{engine === "cloud" ? "Atlas AI is ready" : engine === "local" ? "Local Atlas engine" : "Checking AI engine"}</span></div>
+          <Link href="/settings/workspace" className="settings-link">Workspace settings <ArrowUpRight size={14} /></Link>
+        </div>
+        </>}
+        {!layout.source_panel_collapsed && <button type="button" className="layout-reset-button" onClick={() => void resetLayout()}>Reset layout</button>}
+        <button type="button" className="layout-resize-handle layout-resize-source" onPointerDown={(event) => beginResize(event, "source")} onKeyDown={(event) => keyboardResize(event, "source")} aria-label="Resize left panel" aria-valuemin={240} aria-valuemax={520} aria-valuenow={layout.source_panel_width} role="separator" tabIndex={0} />
+      </aside>
+
+      <main className="atlas-main">
+        <header className="atlas-topbar">
+          <div className="breadcrumb"><span>Atlas</span><ChevronRight size={14} /><strong>{workspace?.name || "Workspace"}</strong></div>
+          <div className="topbar-actions"><span className="privacy-pill"><Cloud size={14} /> Private workspace</span><button type="button" className="topbar-avatar" title="Account">P</button></div>
+        </header>
+
+        {error && <div className="atlas-alert error"><CircleAlert size={16} /><span>{error}</span><button type="button" onClick={() => setError("")}><X size={15} /></button></div>}
+        {notice && <div className="atlas-alert success"><Check size={16} /><span>{notice}</span><button type="button" onClick={() => setNotice("")}><X size={15} /></button></div>}
+
+        {panel === "workspace" && (
+          <section className="workspace-page">
+            <div className="workspace-intro">
+              <div>
+                <p className="eyebrow"><span className="eyebrow-dot" /> Source-aware intelligence</p>
+                <h1>What are you working on?</h1>
+                <p className="intro-copy">Ask Atlas anything. It can use your sources when they help, answer from its general knowledge when they do not, and show you which is which.</p>
+              </div>
+              <div className="intro-stats"><span><strong>{readySources.length}</strong> ready sources</span><span><strong>{messages.filter((message) => message.role === "assistant").length}</strong> answers</span></div>
+            </div>
+
+            <div className="ask-card">
+              <div className="ask-card-top"><span className="ask-orb"><Sparkles size={18} /></span><div><strong>Ask Atlas</strong><span>General knowledge plus source citations</span></div><span className="ask-card-status">{answerMode === "sources" ? "Sources only" : answerMode === "general" ? "Atlas knowledge" : "Auto"}</span></div>
+              <form className="ask-form" onSubmit={(event) => void sendMessage(event)}>
+                <div className="answer-mode-picker" aria-label="Answer mode">
+                  <span>Answer with</span>
+                  <button type="button" className={answerMode === "auto" ? "selected" : ""} onClick={() => setAnswerMode("auto")}>Auto</button>
+                  <button type="button" className={answerMode === "sources" ? "selected" : ""} onClick={() => setAnswerMode("sources")}>My sources only</button>
+                  <button type="button" className={answerMode === "general" ? "selected" : ""} onClick={() => setAnswerMode("general")}>General knowledge</button>
+                </div>
+                <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={answerMode === "sources" ? "Ask a question about your sources..." : "Ask Atlas anything..."} rows={3} disabled={loading} />
+                <div className="ask-form-footer"><span>Try: &quot;What matters most across these sources?&quot;</span><button type="submit" disabled={!input.trim() || loading}><span>{loading ? "Thinking" : "Ask Atlas"}</span>{loading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}</button></div>
+              </form>
+            </div>
+
+            {messages.length > 0 || streaming ? (
+              <div className="conversation-card">
+                <div className="section-heading"><div><p className="eyebrow">Conversation</p><h2>Working with Atlas</h2></div><button type="button" className="quiet-button" onClick={() => setMessages([])}>Clear</button></div>
+                <div className="conversation-list">
+                  {messages.map((message) => <div className={`message-row ${message.role}`} key={message.id}><span className={`message-avatar ${message.role}`}>{message.role === "assistant" ? <Sparkles size={15} /> : "P"}</span><div className="message-body"><div className="message-meta">{message.role === "assistant" ? "Atlas" : "You"}<span>{message.role === "assistant" ? (message.citations?.length ? "From your sources" : "General knowledge") : ""}</span></div><div className="message-copy">{renderMessage(message)}</div></div></div>)}
+                  {streaming && <div className="message-row assistant"><span className="message-avatar assistant"><Sparkles size={15} /></span><div className="message-body"><div className="message-meta">Atlas<span>{streamingHasSources ? "Reading your sources" : "General knowledge"}</span></div><div className="message-copy">{renderMessage({ id: "stream", role: "assistant", content: streaming })}<span className="typing-caret" /></div></div></div>}
+                </div>
+              </div>
+            ) : (
+            <div className="start-area"><div className="start-area-heading"><div><p className="eyebrow">Start with a job</p><h2>Make your sources useful</h2></div><span>Atlas can handle the rest</span></div><div className="action-grid">{ACTIONS.map((action) => { const Icon = action.icon; return <button type="button" key={action.id} className={`action-card tone-${action.tone} ${action.available === false ? "unavailable" : ""}`} onClick={() => handleAction(action)} disabled={Boolean(generatingOutput)} title={action.available === false ? action.unavailableReason : undefined}><span className="action-icon"><Icon size={17} /></span><span className="action-copy"><strong>{action.label}</strong><small>{action.detail}</small></span>{action.available === false ? <span className="planned-badge">Planned</span> : <ChevronRight size={16} className="action-arrow" />}</button>; })}</div></div>
+            )}
+          </section>
+        )}
+
+        {panel === "sources" && (
+         <section className="panel-page"><div className="panel-page-heading"><div><p className="eyebrow">Knowledge base</p><h1>Your sources</h1><p>Add the material Atlas should understand. PDFs, websites, videos, audio, Google files, and course notes all work together here.</p></div><button type="button" className="primary-button" onClick={() => setShowSourceComposer(true)}><Plus size={17} /> Add sources</button></div><div className="source-type-strip">{SOURCE_TYPES.map((type) => { const Icon = type.icon; return <div className={`source-type-card tone-${type.tone}`} key={type.label}><span className="source-type-icon"><Icon size={17} /></span><div><strong>{type.label}</strong><small>{type.detail}</small></div></div>; })}</div><div className="source-library"><div className="library-toolbar"><div className="library-tabs"><button type="button" className={sourceFilter === "all" ? "selected" : ""} onClick={() => setSourceFilter("all")}>All <b>{sources.length}</b></button><button type="button" className={sourceFilter === "ready" ? "selected" : ""} onClick={() => setSourceFilter("ready")}>Ready <b>{readySources.length}</b></button><button type="button" className={sourceFilter === "processing" ? "selected" : ""} onClick={() => setSourceFilter("processing")}>Indexing <b>{processingSources.length}</b></button></div><label className="search-field"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sources" /></label></div>{visibleSources.length ? <div className="source-table">{visibleSources.map((source) => { const Icon = sourceIcon(source.file_type); const busy = source.status === "pending" || source.status === "processing"; return <div className="source-row" key={source.id}><span className={`source-row-icon tone-${sourceTone(source.file_type)}`}>{busy ? <Loader2 size={17} className="spin" /> : <Icon size={17} />}</span><div className="source-row-main"><strong>{source.filename}</strong><span>{source.file_type.toUpperCase()} <i /> {busy ? "Indexing" : source.status === "failed" ? "Needs attention" : "Ready for Atlas"} <i /> {formatDate(source.created_at)}</span>{source.error_message && <small className="source-error">{source.error_message}</small>}</div><button type="button" className="source-preview-button" onClick={() => void openSourcePreview(source)} disabled={busy}>{busy ? "Indexing" : "View indexed text"}</button><div className={`source-status ${source.status}`}>{busy ? "Preparing" : source.status === "failed" ? "Failed" : "Ready"}</div><button type="button" className="icon-button danger-on-hover" title="Remove source" onClick={() => void deleteSource(source.id)}><Trash2 size={16} /></button></div>; })}</div> : <div className="empty-library"><FolderOpen size={28} /><h3>No sources match this view</h3><p>Add your first PDF, website, lecture, or research paper and Atlas will turn it into a searchable knowledge base.</p><button type="button" className="secondary-button" onClick={() => setShowSourceComposer(true)}><UploadCloud size={16} /> Add a source</button></div>}</div></section>
+        )}
+
+        {panel === "outputs" && (
+         <section className="panel-page"><div className="panel-page-heading"><div><p className="eyebrow">Generated with your sources</p><h1>Outputs</h1><p>Study tools, structured thinking, and useful deliverables made from the material in this workspace.</p></div><button type="button" className="primary-button" onClick={() => setPanel("workspace")}><Sparkles size={17} /> Ask Atlas</button></div><div className="output-layout"><div className="output-list"><div className="output-list-heading"><span>Created outputs</span><span>{outputs.length}</span></div>{outputs.length ? outputs.map((output) => <button type="button" key={output.id} className={`output-item ${selectedOutput?.id === output.id ? "selected" : ""}`} onClick={() => setSelectedOutput(output)}><span className="output-item-icon tone-violet"><WandSparkles size={16} /></span><span><strong>{output.title}</strong><small>{outputLabel(output.output_type)} <i /> {output.status === "ready" ? "Ready" : output.status === "failed" ? "Failed" : "Building"}</small></span>{output.status === "pending" || output.status === "processing" ? <Loader2 size={15} className="spin" /> : output.status === "failed" ? <CircleAlert size={15} /> : <ChevronRight size={16} />}</button>) : <div className="output-empty"><WandSparkles size={22} /><strong>Nothing generated yet</strong><span>Choose a study tool below to create your first output.</span></div>}<div className="output-create-list">{ACTIONS.filter((action) => action.studio).map((action) => { const Icon = action.icon; const type = action.studio as StudioOutput["output_type"]; return <button type="button" key={action.id} className="output-create-button" onClick={() => void createOutput(type)} disabled={generatingOutput === type}><Icon size={16} /><span>{action.label}</span>{generatingOutput === type ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}</button>; })}</div></div><div className="output-viewer">{selectedOutput ? <><div className="output-viewer-heading"><div><p className="eyebrow">{outputLabel(selectedOutput.output_type)}</p><h2>{selectedOutput.title}</h2></div><button type="button" className="icon-button" onClick={() => setSelectedOutput(null)}><X size={16} /></button></div><div className="output-content">{selectedOutput.status === "failed" ? <div className="output-building"><CircleAlert size={22} /><h3>This output could not be completed</h3><p>{selectedOutput.error || "Atlas could not finish this output. Try again."}</p></div> : selectedOutput.status !== "ready" ? <div className="output-building"><div className="building-orbit"><Sparkles size={22} /></div><h3>Atlas is building this for you</h3><p>It is reading your indexed sources and assembling a citation-backed {outputLabel(selectedOutput.output_type).toLowerCase()}.</p></div> : selectedOutput.content ? renderOutputContent(selectedOutput) : <div className="output-building"><Check size={22} /><h3>Your output is ready</h3><p>Atlas returned an empty result. Try generating it again.</p></div>}</div></> : <div className="viewer-placeholder"><div className="viewer-placeholder-icon"><FileText size={24} /></div><h2>Select an output</h2><p>Your generated study tools and structured notes will appear here.</p></div>}</div></div></section>
+        )}
+
+        {panel === "audio" && (
+         <section className="panel-page audio-page"><div className="panel-page-heading"><div><p className="eyebrow">Listen to your knowledge base</p><h1>Audio overview</h1><p>Atlas reads your ready sources, writes a short two-host discussion, and returns both an audio track and a transcript you can follow.</p></div><button type="button" className="primary-button" onClick={() => void createAudio()} disabled={audioLoading || !readySources.length}><Headphones size={17} /> {audioLoading ? "Generating..." : "Generate overview"}</button></div><div className="audio-explainer"><div><strong>What this does</strong><p>Useful when you want to review lecture notes, research papers, or a meeting brief while walking. It is not another chat response. It is a narrated summary made from the ready sources shown below.</p></div><span>{readySources.length} ready source{readySources.length === 1 ? "" : "s"} in scope</span></div>{audio ? <div className="audio-layout"><div className="audio-player-card"><div className="audio-art"><div className="audio-art-grid" /><Headphones size={34} /></div><div className="audio-player-copy"><span className="eyebrow">Deep dive</span><h2>{audio.title}</h2><p>{formatDuration(audio.duration)} of narrated source review</p><div className="audio-controls"><button type="button" className="audio-play" disabled={!audioUrl} onClick={() => { const element = audioRef.current; if (!element) return; if (element.paused) { void element.play(); setAudioPlaying(true); } else { element.pause(); setAudioPlaying(false); } }}>{audioPlaying ? "Pause" : <><Play size={16} fill="currentColor" /> {audioUrl ? "Play overview" : "Audio unavailable"}</>}</button><span>{audio.transcript.length} transcript moments</span></div><audio ref={audioRef} src={audioUrl || undefined} onEnded={() => setAudioPlaying(false)} /></div></div><div className="transcript-card"><div className="section-heading"><div><p className="eyebrow">Transcript</p><h2>Follow along</h2></div><span>{audio.style === "deep_dive" ? "Two hosts" : "Brief"}</span></div>{audio.transcript.map((line, index) => <div className="transcript-line" key={`${line.start}-${index}`}><span>{line.name}</span><p>{line.text}{line.cite ? <sup>[{line.cite}]</sup> : null}</p></div>)}</div></div> : <div className="audio-empty"><div className="audio-empty-art"><Mic2 size={30} /></div><h2>Give your sources a voice</h2><p>Generate a narrated summary for research reviews, course materials, meeting prep, or a quick walk through the ideas you have collected.</p><button type="button" className="secondary-button" onClick={() => void createAudio()} disabled={audioLoading || !readySources.length}>{audioLoading ? "Preparing your overview" : readySources.length ? "Create audio overview" : "Add sources first"}</button></div>}</section>
+        )}
+      </main>
+
+      <button type="button" className="right-rail-toggle" onClick={() => setLayout((current) => ({ ...current, output_panel_collapsed: !current.output_panel_collapsed }))} aria-label={layout.output_panel_collapsed ? "Restore output panel" : "Collapse output panel"}>
+        {layout.output_panel_collapsed ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}
+      </button>
+
+      <aside className="atlas-right-rail"><div className="right-rail-heading"><div><p className="eyebrow">Workspace pulse</p><h2>At a glance</h2></div><MoreHorizontal size={18} /></div><div className="pulse-card"><div className="pulse-ring"><span>{readySources.length}</span></div><div><strong>Ready to think with</strong><p>{readySources.length ? "Your sources are available to Atlas." : "Add a source to wake up this workspace."}</p></div></div><div className="rail-section"><div className="rail-section-heading"><span>Source types</span><button type="button" onClick={() => setPanel("sources")}>View all</button></div><div className="rail-type-list">{SOURCE_TYPES.slice(0, 4).map((type) => { const Icon = type.icon; const count = sources.filter((source) => source.file_type.toLowerCase().includes(type.label.toLowerCase().replace(/s$/, "").split(" ")[0])).length; return <button type="button" key={type.label} onClick={() => setPanel("sources")}><span className={`rail-type-icon tone-${type.tone}`}><Icon size={15} /></span><span>{type.label}</span><b>{count}</b></button>; })}</div></div><div className="rail-section"><div className="rail-section-heading"><span>Quick actions</span><span className="rail-count">{ACTIONS.length}</span></div><div className="rail-action-list"><button type="button" onClick={() => void createAudio()}><Headphones size={15} /><span>Listen to an overview</span><ChevronRight size={14} /></button><button type="button" onClick={() => handleAction(ACTIONS.find((action) => action.id === "compare")!)}><Network size={15} /><span>Compare approaches</span><ChevronRight size={14} /></button><button type="button" onClick={() => handleAction(ACTIONS.find((action) => action.id === "insights")!)}><Lightbulb size={15} /><span>Find hidden insights</span><ChevronRight size={14} /></button></div></div><div className="rail-callout"><div className="rail-callout-icon"><UploadCloud size={16} /></div><strong>Bring in more context</strong><p>Google Docs, Slides, lecture recordings, and textbook chapters can all live in this workspace.</p><button type="button" onClick={() => setShowSourceComposer(true)}>Add another source <ArrowUpRight size={13} /></button></div></aside>
+
+      {showSourceComposer && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSourceComposer(false); }}><div className="source-composer" role="dialog" aria-modal="true" aria-labelledby="source-composer-title"><div className="composer-heading"><div><p className="eyebrow">Expand the knowledge base</p><h2 id="source-composer-title">Add sources to Atlas</h2><p>Everything you add becomes available to Ask Atlas and the tools below.</p></div><button type="button" className="icon-button" onClick={() => setShowSourceComposer(false)}><X size={17} /></button></div><div className="composer-tabs"><button type="button" className={sourceMode === "files" ? "selected" : ""} onClick={() => setSourceMode("files")}><FileUp size={16} /> Upload files</button><button type="button" className={sourceMode === "link" ? "selected" : ""} onClick={() => setSourceMode("link")}><Globe2 size={16} /> Paste a link</button><button type="button" className={sourceMode === "text" ? "selected" : ""} onClick={() => setSourceMode("text")}><FileText size={16} /> Paste text</button></div>{sourceMode === "files" && <div className="composer-body"><button type="button" className="dropzone" onClick={() => fileInputRef.current?.click()} disabled={sourceBusy}><span className="dropzone-icon"><UploadCloud size={22} /></span><strong>{sourceBusy ? "Adding sources..." : "Choose files from your device"}</strong><span>PDF, DOCX, PPTX, XLSX, TXT, audio, and image files</span></button><input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.mp3,.wav,.m4a,.aac,.ogg,.flac,.png,.jpg,.jpeg,.webp" className="visually-hidden" onChange={(event) => void handleFiles(event.target.files)} /><div className="composer-divider"><span>or connect a library</span></div><Link href="/settings/connections" className="google-connect"><span className="google-connect-mark">G</span><span><strong>Connect Google Drive</strong><small>Bring in Google Docs and Slides</small></span><ArrowUpRight size={16} /></Link><p className="composer-footnote">You can also add lecture recordings, textbook chapters, research papers, and course materials as files.</p></div>}{sourceMode === "link" && <form className="composer-body" onSubmit={(event) => void handleUrl(event)}><label className="field-label">Website or YouTube URL<input value={sourceInput} onChange={(event) => setSourceInput(event.target.value)} placeholder="https://..." autoFocus /></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceInput.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding link</> : <><Plus size={16} /> Add link</>}</button><p className="composer-footnote">Atlas extracts readable web text and YouTube transcripts so answers can point back to the original source.</p></form>}{sourceMode === "text" && <form className="composer-body" onSubmit={(event) => void handleText(event)}><label className="field-label">Title<input value={sourceTextTitle} onChange={(event) => setSourceTextTitle(event.target.value)} placeholder="Lecture notes, research idea, meeting notes..." autoFocus /></label><label className="field-label">Text<textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} rows={7} placeholder="Paste the material Atlas should understand..." /></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceText.trim() || !sourceTextTitle.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding text</> : <><Plus size={16} /> Add text</>}</button></form>}</div></div>}
+
+      {selectedSource && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setSelectedSource(null); setSourcePreview(null); } }}><div className="source-preview-modal" role="dialog" aria-modal="true" aria-labelledby="source-preview-title"><div className="composer-heading"><div><p className="eyebrow">Indexed source</p><h2 id="source-preview-title">{selectedSource.filename}</h2><p>{selectedSource.file_type.toUpperCase()} source text that Atlas can search and cite.</p></div><button type="button" className="icon-button" onClick={() => { setSelectedSource(null); setSourcePreview(null); }}><X size={17} /></button></div>{selectedSource.source_url && <a className="source-preview-link" href={selectedSource.source_url} target="_blank" rel="noreferrer"><SquareArrowOutUpRight size={14} /> Open original source</a>}{previewLoading ? <div className="preview-loading"><Loader2 size={22} className="spin" /><p>Loading the text Atlas indexed...</p></div> : sourcePreview?.chunks.length ? <div className="preview-chunks">{sourcePreview.chunks.map((chunk) => <article className="preview-chunk" key={chunk.id}><span>{chunk.timestamp != null ? `Timestamp ${formatDuration(chunk.timestamp)}` : chunk.page_number ? `Page ${chunk.page_number}` : "Indexed excerpt"}</span><p>{chunk.content}</p></article>)}</div> : <div className="preview-loading"><FileText size={22} /><p>No indexed text is available yet. Check the source status and try again.</p></div>}</div></div>}
+
+      {selectedCitation && <div className="citation-drawer"><div className="citation-drawer-heading"><div><p className="eyebrow">Source reference</p><h3>{selectedCitation.filename || "Atlas source"}</h3></div><button type="button" className="icon-button" onClick={() => setSelectedCitation(null)}><X size={16} /></button></div><div className="citation-meta">{selectedCitation.page_number ? `Page ${selectedCitation.page_number}` : selectedCitation.source_label || "Verified source excerpt"}{selectedCitation.external_url && <a href={selectedCitation.external_url} target="_blank" rel="noreferrer">Open source <SquareArrowOutUpRight size={13} /></a>}</div><blockquote>{selectedCitation.content || selectedCitation.text || "No excerpt was returned for this citation."}</blockquote></div>}
     </div>
   );
 }

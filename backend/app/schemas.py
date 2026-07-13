@@ -52,11 +52,15 @@ class ChatMessageBase(BaseModel):
 class ChatMessageCreate(BaseModel):
     content: str
     synthesis_node_id: Optional[UUID] = None
+    mode: Literal["auto", "sources", "general"] = "auto"
 
 class ChatMessageOut(ChatMessageBase):
     id: UUID
     session_id: UUID
     citations: Optional[List[Any]] = None
+    runtime: str = "legacy"
+    trace_id: Optional[str] = None
+    source_scope: Optional[Any] = None
     created_at: datetime
     
     class Config:
@@ -92,7 +96,7 @@ class TextIngestRequest(BaseModel):
     content: str = Field(..., min_length=1)
     provider: Optional[str] = None
 
-StudioOutputType = Literal["mind_map", "study_guide", "quiz", "flashcards"]
+StudioOutputType = Literal["report", "mind_map", "study_guide", "quiz", "flashcards"]
 
 
 class StudioOutputCreate(BaseModel):
@@ -101,11 +105,19 @@ class StudioOutputCreate(BaseModel):
     # Optional. When set, generation is scoped to this synthesis node's inputs,
     # exactly like scoped chat in Patch 007. When null, uses the whole workspace.
     synthesis_node_id: UUID | None = None
+    source_ids: List[UUID] | None = None
+    length: Literal["brief", "standard", "deep"] = "standard"
+    focus: str | None = Field(default=None, max_length=500)
+    idempotency_key: str | None = Field(default=None, max_length=255)
 
 
 class StudioCitationOut(BaseModel):
     document_id: UUID
+    chunk_id: UUID | None = None
     page_number: int | None = None
+    filename: str | None = None
+    quote: str | None = None
+    source_url: str | None = None
 
     class Config:
         from_attributes = True
@@ -120,11 +132,74 @@ class StudioOutputOut(BaseModel):
     status: str
     content: Any | None
     error: str | None
+    run_id: UUID | None = None
+    runtime: str = "legacy"
+    source_scope: Any | None = None
+    retry_count: int = 0
+    version: int = 1
+    progress: int = 0
     created_at: datetime
     citations: list[StudioCitationOut] = []
 
     class Config:
         from_attributes = True
+
+
+class ReportCreate(BaseModel):
+    title: str | None = None
+    source_ids: List[UUID] | None = None
+    length: Literal["brief", "standard", "deep"] = "standard"
+    focus: str | None = Field(default=None, max_length=500)
+    idempotency_key: str | None = Field(default=None, max_length=255)
+
+
+class AIRunEventOut(BaseModel):
+    id: UUID
+    run_id: UUID
+    event_type: str
+    status: str | None = None
+    progress: int | None = None
+    message: str | None = None
+    payload: Any | None = None
+    trace_id: str | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AIRunOut(BaseModel):
+    id: UUID
+    user_id: str
+    workspace_id: UUID
+    notebook_id: UUID
+    agent_id: str
+    workflow_id: str | None = None
+    runtime: str
+    status: str
+    request_id: str | None = None
+    trace_id: str | None = None
+    latency_ms: int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class WorkspaceLayoutOut(BaseModel):
+    workspace_id: UUID
+    layout: dict[str, Any]
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WorkspaceLayoutUpdate(BaseModel):
+    layout: dict[str, Any]
 
 
 class GraphEdgeCreate(BaseModel):

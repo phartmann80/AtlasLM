@@ -7,18 +7,23 @@
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
+const crypto = require('crypto');
 const { URL } = require('url');
 
 // Configuration
-const BASE_URL = "http://localhost:8080";
-const SUPABASE_URL = "https://ortmzzdfkwidvuolczqa.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ydG16emRma3dpZHZ1b2xjenFhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxNTQ2NzgsImV4cCI6MjA5NTczMDY3OH0.0HRR2z8jRWJm5vnErHxSnRfdmu_7unz0osjRcIMz5vI";
+const BASE_URL = process.env.BASE_URL || "http://localhost:8080";
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
 
 // Test data
+function makePassword(label) {
+    return `TestPass@${crypto.randomBytes(8).toString('hex')}${label}!`;
+}
+
 const TEST_USER_A_EMAIL = `test_user_a_${Date.now()}@atlaslm.test`;
-const TEST_USER_A_PASSWORD = "TestPass@123!Secure";
+const TEST_USER_A_PASSWORD = makePassword("A");
 const TEST_USER_B_EMAIL = `test_user_b_${Date.now()}@atlaslm.test`;
-const TEST_USER_B_PASSWORD = "TestPass@456!Secure";
+const TEST_USER_B_PASSWORD = makePassword("B");
 
 // Session storage
 const session = {
@@ -48,7 +53,7 @@ function log(msg, level = "INFO") {
 
 function logResponse(title, statusCode, headers, body) {
     const statusColor = (statusCode >= 200 && statusCode < 300) ? "\x1b[92m" : "\x1b[91m";
-    console.log(`\n${statusColor}→ ${title}\x1b[0m`);
+    console.log(`\n${statusColor}â†’ ${title}\x1b[0m`);
     console.log(`  Status: ${statusCode}`);
     console.log(`  Content-Type: ${headers['content-type'] || 'unknown'}`);
     if (body) {
@@ -110,14 +115,14 @@ async function testHealth() {
     try {
         const result = await makeRequest(`${BASE_URL}/health`);
         if (result.status === 200) {
-            log("✓ Backend is healthy", "SUCCESS");
+            log("âœ“ Backend is healthy", "SUCCESS");
             return true;
         } else {
-            log(`✗ Backend health check failed: ${result.status}`, "ERROR");
+            log(`âœ— Backend health check failed: ${result.status}`, "ERROR");
             return false;
         }
     } catch (e) {
-        log(`✗ Cannot connect to backend: ${e.message}`, "ERROR");
+        log(`âœ— Cannot connect to backend: ${e.message}`, "ERROR");
         log("Make sure Docker services are running:", "WARNING");
         log("  cd C:\\Users\\hartm\\atlaslm && docker-compose up -d", "WARNING");
         return false;
@@ -147,14 +152,14 @@ async function supabaseAuthSignup(email, password) {
         const body = logResponse(`Supabase Signup: ${email}`, result.status, result.headers, result.body);
         
         if (result.status === 200 || result.status === 201) {
-            log(`✓ User created: ${email}`, "SUCCESS");
+            log(`âœ“ User created: ${email}`, "SUCCESS");
             return body;
         } else {
-            log(`✗ Signup failed: ${result.status}`, "ERROR");
+            log(`âœ— Signup failed: ${result.status}`, "ERROR");
             return null;
         }
     } catch (e) {
-        log(`✗ Signup error: ${e.message}`, "ERROR");
+        log(`âœ— Signup error: ${e.message}`, "ERROR");
         return null;
     }
 }
@@ -183,14 +188,14 @@ async function supabaseAuthLogin(email, password) {
         
         if (result.status === 200 || result.status === 201) {
             const token = body.access_token;
-            log(`✓ Login successful. JWT: ${token.substring(0, 50)}...`, "SUCCESS");
+            log(`âœ“ Login successful. JWT received but not printed.`, "SUCCESS");
             return token;
         } else {
-            log(`✗ Login failed: ${result.status}`, "ERROR");
+            log(`âœ— Login failed: ${result.status}`, "ERROR");
             return null;
         }
     } catch (e) {
-        log(`✗ Login error: ${e.message}`, "ERROR");
+        log(`âœ— Login error: ${e.message}`, "ERROR");
         return null;
     }
 }
@@ -215,14 +220,14 @@ async function createWorkspace(jwtToken, workspaceName) {
         
         if (result.status === 200 || result.status === 201) {
             const workspaceId = body.id;
-            log(`✓ Workspace created. ID: ${workspaceId}`, "SUCCESS");
+            log(`âœ“ Workspace created. ID: ${workspaceId}`, "SUCCESS");
             return workspaceId;
         } else {
-            log(`✗ Workspace creation failed: ${result.status}`, "ERROR");
+            log(`âœ— Workspace creation failed: ${result.status}`, "ERROR");
             return null;
         }
     } catch (e) {
-        log(`✗ Workspace error: ${e.message}`, "ERROR");
+        log(`âœ— Workspace error: ${e.message}`, "ERROR");
         return null;
     }
 }
@@ -232,7 +237,7 @@ async function uploadDocument(jwtToken, workspaceId, filePath, fileName) {
     
     // For now, we'll skip file upload and create a test via API
     // In real scenario, we'd use multipart/form-data
-    log("⚠ Skipping actual file upload, using test document creation", "WARNING");
+    log("âš  Skipping actual file upload, using test document creation", "WARNING");
     return null;
 }
 
@@ -253,17 +258,17 @@ async function listWorkspaces(jwtToken, userLabel = "") {
         
         if (result.status === 200) {
             const workspaces = Array.isArray(body) ? body : (body.workspaces || []);
-            log(`✓ Found ${workspaces.length} workspaces`, "SUCCESS");
+            log(`âœ“ Found ${workspaces.length} workspaces`, "SUCCESS");
             workspaces.forEach(ws => {
                 console.log(`  - ${ws.name} (ID: ${ws.id})`);
             });
             return workspaces;
         } else {
-            log(`✗ List workspaces failed: ${result.status}`, "ERROR");
+            log(`âœ— List workspaces failed: ${result.status}`, "ERROR");
             return [];
         }
     } catch (e) {
-        log(`✗ Workspaces error: ${e.message}`, "ERROR");
+        log(`âœ— Workspaces error: ${e.message}`, "ERROR");
         return [];
     }
 }
@@ -282,14 +287,14 @@ async function verifyIsolation(jwtToken, otherWorkspaceId, userLabel = "") {
         );
         
         if (result.status === 403 || result.status === 404) {
-            log(`✓ Access correctly blocked! Status: ${result.status}`, "SUCCESS");
+            log(`âœ“ Access correctly blocked! Status: ${result.status}`, "SUCCESS");
             return true;
         } else {
-            log(`✗ SECURITY ISSUE: Should be blocked but got ${result.status}`, "ERROR");
+            log(`âœ— SECURITY ISSUE: Should be blocked but got ${result.status}`, "ERROR");
             return false;
         }
     } catch (e) {
-        log(`✗ Isolation test error: ${e.message}`, "ERROR");
+        log(`âœ— Isolation test error: ${e.message}`, "ERROR");
         return false;
     }
 }
@@ -298,10 +303,15 @@ async function main() {
     console.log("\n" + "=".repeat(70));
     console.log("AtlasLM Complete API Verification Suite");
     console.log("=".repeat(70) + "\n");
+
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+        log("Set SUPABASE_URL and SUPABASE_ANON_KEY through the secure test environment.", "ERROR");
+        process.exit(1);
+    }
     
     // Step 0: Check backend health
     if (!(await testHealth())) {
-        console.log("\n❌ Backend is not running. Cannot proceed.");
+        console.log("\nâŒ Backend is not running. Cannot proceed.");
         process.exit(1);
     }
     
@@ -366,15 +376,15 @@ async function main() {
     console.log("VERIFICATION SUMMARY");
     console.log("=".repeat(70));
     console.log(`
-✓ User A Created:     ${session.user_a.email}
-  - Token:            ${session.user_a.token.substring(0, 50)}...
+âœ“ User A Created:     ${session.user_a.email}
+  - Token:            received, not printed
   - Workspaces:       ${userAWorkspaces.length}
 
-✓ User B Created:     ${session.user_b.email}
-  - Token:            ${session.user_b.token.substring(0, 50)}...
+âœ“ User B Created:     ${session.user_b.email}
+  - Token:            received, not printed
   - Workspaces:       ${userBWorkspaces.length}
   
-✓ Isolation Tests:
+âœ“ Isolation Tests:
   - User B cannot see/access User A workspaces: VERIFIED
   - Cross-user API access blocked: VERIFIED
 

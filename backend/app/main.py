@@ -11,6 +11,7 @@ from sqlalchemy import text
 from .core.config import settings
 from .core.database import engine, Base
 from .api.endpoints import router as api_router
+from .api.internal_ai import router as internal_ai_router
 from .middleware.auth_middleware import AuthMiddleware
 from .stripe_webhook import router as stripe_router
 
@@ -43,22 +44,32 @@ except Exception as e:
     if not os.getenv("VERCEL"):
         raise
 
+production_env = settings.ATLAS_ENV.lower() in {"prod", "production"}
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url="/openapi.json",
+    docs_url=None if production_env else "/docs",
+    redoc_url=None if production_env else "/redoc",
+    openapi_url=None if production_env else "/openapi.json",
 )
+
+configured_origins = {
+    origin.strip().rstrip("/")
+    for origin in settings.ATLAS_ALLOWED_ORIGINS.split(",")
+    if origin.strip()
+}
+configured_origins.update({
+    "http://localhost:3000",
+    "http://localhost:3100",
+    "http://localhost:3010",
+    "https://atlaslm.vercel.app",
+    "https://atlaslm.cloud",
+    "https://www.atlaslm.cloud",
+})
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3100",
-        "http://localhost:3010",
-        "https://atlaslm.cloud",
-        "https://www.atlaslm.cloud",
-        "https://atlaslm.vercel.app",
-    ],
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origins=sorted(configured_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,6 +78,7 @@ app.add_middleware(
 app.add_middleware(AuthMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+app.include_router(internal_ai_router)
 app.include_router(stripe_router)
 
 from .routes import sources
@@ -75,11 +87,13 @@ app.include_router(sources.router)
 
 @app.get("/", tags=["system"])
 def read_root():
-    return {
+    response = {
         "status": "healthy",
         "project": settings.PROJECT_NAME,
-        "docs_url": "/docs",
     }
+    if not production_env:
+        response["docs_url"] = "/docs"
+    return response
 
 
 @app.get("/health", tags=["system"])

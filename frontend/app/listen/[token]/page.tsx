@@ -20,9 +20,10 @@ async function getData(token: string) {
 }
 
 export default async function ListenPage(
-  { params }: { params: { token: string } },
+  { params }: { params: Promise<{ token: string }> },
 ) {
-  const data = await getData(params.token);
+  const { token } = await params;
+  const data = await getData(token);
   if (!data) {
     return (
       <div className="ao-public ao-public-empty">
@@ -32,5 +33,5 @@ export default async function ListenPage(
       </div>
     );
   }
-  return <PublicListen data={data} apiBase={CLIENT_API} token={params.token} />;
+  return <PublicListen data={data} apiBase={CLIENT_API} token={token} />;
 }

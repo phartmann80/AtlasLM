@@ -80,9 +80,69 @@ class ChatMessage(Base):
     role = Column(String(50), nullable=False) # 'user', 'assistant'
     content = Column(Text, nullable=False)
     citations = Column(JSON, nullable=True) # Grounded citations structure
+    runtime = Column(String(32), nullable=False, default="legacy", server_default="legacy")
+    trace_id = Column(String(128), nullable=True, index=True)
+    source_scope = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     session = relationship("ChatSession", back_populates="messages")
+
+
+class AIRun(Base):
+    """Durable record for an agent or workflow execution."""
+
+    __tablename__ = "ai_runs"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(255), nullable=False, index=True)
+    workspace_id = Column(PG_UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    notebook_id = Column(PG_UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    agent_id = Column(String(120), nullable=False)
+    workflow_id = Column(String(120), nullable=True)
+    runtime = Column(String(32), nullable=False, default="legacy", server_default="legacy")
+    model_id = Column(String(160), nullable=True)
+    status = Column(String(32), nullable=False, default="queued", server_default="queued", index=True)
+    request_id = Column(String(128), nullable=True, index=True)
+    idempotency_key = Column(String(255), nullable=True, index=True)
+    trace_id = Column(String(128), nullable=True, index=True)
+    latency_ms = Column(Integer, nullable=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    error_code = Column(String(120), nullable=True)
+    error_message = Column(Text, nullable=True)
+    run_metadata = Column("metadata", JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AIRunEvent(Base):
+    """Append-only progress and diagnostic events for an AI run."""
+
+    __tablename__ = "ai_run_events"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(PG_UUID(as_uuid=True), ForeignKey("ai_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=True)
+    progress = Column(Integer, nullable=True)
+    message = Column(String(500), nullable=True)
+    payload = Column(JSONB, nullable=True)
+    trace_id = Column(String(128), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class WorkspaceLayout(Base):
+    """Persisted dashboard layout, scoped to both user and workspace."""
+
+    __tablename__ = "workspace_layouts"
+    __table_args__ = (UniqueConstraint("user_id", "workspace_id", name="unique_workspace_layout"),)
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(255), nullable=False, index=True)
+    workspace_id = Column(PG_UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    layout = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class StudioOutput(Base):
     __tablename__ = "studio_outputs"
@@ -103,6 +163,13 @@ class StudioOutput(Base):
     status = Column(String, nullable=False, default="pending")  # pending|processing|ready|failed
     content = Column(JSONB, nullable=True)
     error = Column(Text, nullable=True)
+    run_id = Column(PG_UUID(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    runtime = Column(String(32), nullable=False, default="legacy", server_default="legacy")
+    source_scope = Column(JSONB, nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0, server_default="0")
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+    idempotency_key = Column(String(255), nullable=True, index=True)
+    progress = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -123,7 +190,14 @@ class StudioOutputCitation(Base):
         ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,
     )
+    chunk_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("document_chunks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     page_number = Column(Integer, nullable=True)
+    quote = Column(Text, nullable=True)
+    source_url = Column(String(2083), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

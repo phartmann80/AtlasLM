@@ -14,7 +14,7 @@ ok = True
 
 # [1] vault round-trips and never stores plaintext
 v = TokenVault()
-secret = "1//refresh-token-EXAMPLE-value"
+secret = "not-a-real-refresh-token-fixture"
 ct = v.encrypt(secret)
 assert secret not in ct, "plaintext leaked into ciphertext"
 assert v.decrypt(ct) == secret, "decrypt did not recover the token"

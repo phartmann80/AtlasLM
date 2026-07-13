@@ -2,7 +2,7 @@
 # Minimal config: enable the JSON format so the backend can parse results.
 use_default_settings: true
 server:
-  secret_key: "change-me-in-env"     # override via SEARXNG_SECRET
+  secret_key: "example-only-not-for-runtime"     # override via SEARXNG_SECRET
   limiter: false
 search:
   formats:

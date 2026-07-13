@@ -16,8 +16,8 @@ from .base import SearchAdapter, ResearchResult
 
 log = logging.getLogger("atlas.research.web")
 
-SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng:8080").rstrip("/")
-TIMEOUT = float(os.getenv("RESEARCH_HTTP_TIMEOUT", "12"))
+SEARXNG_URL = (os.getenv("SEARXNG_URL") or "http://searxng:8080").rstrip("/")
+TIMEOUT = float(os.getenv("RESEARCH_HTTP_TIMEOUT") or "12")
 
 
 def _hid(s: str) -> str:

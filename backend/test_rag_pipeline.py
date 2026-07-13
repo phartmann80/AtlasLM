@@ -1,22 +1,12 @@
-import sys
+﻿import sys
 import json
+import os
 import httpx
 import asyncio
 
 # Configurations (uses local port 8000 inside the container)
 API_URL = "http://localhost:8000"
-TOKEN = (
-    "eyJhbGciOiJFUzI1NiIsImtpZCI6IjRjNmIyYjFjLWYwNGYtNGQ4ZS1hMDM0LWRlM2E5MjhmZmIyMCIsInR5cCI6IkpXVCJ9."
-    "eyJpc3MiOiJodHRwczovL29ydG16emRma3dpZHZ1b2xjenFhLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiI1ZmEzNzhmYi"
-    "01NjFhLTQ5MDgtOGI1Yy0zOTU1OWI3YmE1OGMiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzgwMTc1Nzk5LCJpYXQi"
-    "OjE3ODAxNzIxOTksImVtYWlsIjoiaGFydG1hbl90ZXN0X2F0bGFzbG0xMjNAZ21haWwuY29tIiwicGhvbmUiOiIiLCJhcHBfbW"
-    "V0YWRhdGEiOnsicHJvdmlkZXIiOiJlbWFpbCIsInByb3ZpZGVycyI6WyJlbWFpbCJdfSwidXNlcl9tZXRhZGF0YSI6eyJlbWFp"
-    "bCI6ImhhcnRtYW5fdGVzdF9hdGxhc2xtMTIzQGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJwaG9uZV92ZXJpZm"
-    "llZCI6ZmFsc2UsInN1YiI6IjVmYTM3OGZiLTU2MWEtNDkwOC04YjVjLTM5NTU5YjdiYTU4YyJ9LCJyb2xlIjoiYXV0aGVudGlj"
-    "YXRlZCIsImFhbCI6ImFhbDEiLCJhbXIiOlt7Im1ldGhvZCI6InBhc3N3b3JkIiwidGltZXN0YW1wIjoxNzgwMTcyMTk5fV0sIn"
-    "Nlc3Npb25faWQiOiJkMjNmZDJmMC05NjllLTQ3ODUtYTExNy1iZjZiZWUyMDJiNjciLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ."
-    "HFjrE39O8qoagFE868xJX3ULMlAFfLMLHkK5UMttvqsnVEafa_X5WbNQCS6Lk_VfgK-VK621UPrTKNrKBCLOUw"
-)
+TOKEN = os.getenv("ATLAS_TEST_TOKEN", "")
 WORKSPACE_ID = "255c0ca1-6bf4-4772-9dc6-2bf56c705d78"
 
 # Test markdown content
@@ -27,6 +17,10 @@ In his spare time, he researches mathematical optimizations for pgvector index t
 """
 
 async def run_end_to_end_test():
+    if not TOKEN:
+        print("SKIP: set ATLAS_TEST_TOKEN through a secure test environment")
+        return
+
     headers = {
         "Authorization": f"Bearer {TOKEN}"
     }

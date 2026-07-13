@@ -120,6 +120,7 @@ class RAGService:
             FROM document_chunks dc
             JOIN documents d ON dc.document_id = d.id
             WHERE d.workspace_id = :workspace_id
+              AND d.status = 'ready'
               {scope_filter}
               AND (d.embedding_model IS NULL OR d.embedding_model = :model_id)
             ORDER BY distance ASC
@@ -162,7 +163,9 @@ class RAGService:
     # ------------------------------------------------------------------ #
 
     def construct_system_prompt(
-        self, chunks: List[Dict[str, Any]]
+        self,
+        chunks: List[Dict[str, Any]],
+        answer_mode: str = "sources",
     ) -> Tuple[str, Dict[str, Any]]:
         source_mapping = {}
         context_blocks = []
@@ -190,31 +193,34 @@ class RAGService:
 
         context_str = "\n\n".join(context_blocks)
 
+        if answer_mode == "sources":
+            mode_rules = (
+                "You are AtlasLM, a professional, strictly source-grounded research assistant.\n"
+                "Use ONLY the provided sources below. If the answer is not present, say exactly: "
+                "'I could not find that information in the uploaded sources.' Do not add general knowledge.\n"
+                "Every factual claim MUST carry the source tag where the fact was found, such as [source_1].\n"
+            )
+        elif answer_mode == "general":
+            mode_rules = (
+                "You are AtlasLM, a capable general-purpose AI research assistant.\n"
+                "Answer from your broad knowledge. Do not pretend a claim came from a user source unless you cite it.\n"
+                "If the question asks for current facts, explain that a live research search may be needed.\n"
+            )
+        else:
+            mode_rules = (
+                "You are AtlasLM, a capable general-purpose AI research assistant with access to the user's sources.\n"
+                "Use the provided source blocks when they directly answer or materially inform the question, and cite those claims with [source_N].\n"
+                "If the sources are unrelated or do not contain the answer, answer from your broad general knowledge instead. Do not say you cannot answer merely because the sources do not mention something.\n"
+                "When an answer is primarily general knowledge, start with 'General knowledge'. When it is source-backed, cite the relevant claims.\n"
+            )
+
         system_prompt = (
-            "You are AtlasLM, a professional, strictly source-grounded research assistant.\n"
-            "Your mission is to answer user questions using ONLY the provided sources below.\n\n"
-            "=== STRICT RULES ===\n"
-            "1. NEVER use knowledge outside the provided source blocks.\n"
-            "2. Source blocks may contain STRUCTURED DATA: rows of 'Column: value' pairs "
-            "from spreadsheets and CSV files, table rows, or lists. Scan every line of "
-            "every source block carefully before concluding information is absent. An "
-            "answer buried in the middle of a data block is still an answer.\n"
-            "3. Only if the answer is truly not present in any source block, reply exactly "
-            "with: 'I could not find that information in the uploaded sources.' "
-            "Do not invent facts or add general knowledge under any circumstances.\n"
-            "4. Every claim MUST carry the source tag in brackets where the fact was found "
-            "(e.g. [source_1] or [source_2]). If multiple sources apply, cite all "
-            "(e.g. [source_1][source_3]). Place citations at the end of clauses/sentences.\n"
-            "5. NEVER mention tags that are not in the provided list.\n"
-            "6. No emojis. Use clear, professional formatting.\n"
-            "7. You may use the conversation history to resolve references "
-            "(e.g. 'that section', 'the second point'), but facts must still come "
-            "only from the sources.\n"
-            "8. Punctuation style: write like a careful human editor. NEVER use em dashes, "
-            "en dashes, or ellipsis characters in your output. Use commas, semicolons, "
-            "colons, and periods instead. Hyphens are allowed only inside compound words "
-            '(e.g. "re-ingestion", "key-value").\n\n'
-            f"=== RETRIEVED SOURCES ===\n{context_str}\n"
+            f"{mode_rules}\n"
+            "Source blocks may contain structured data, tables, lists, and timestamped transcripts. Scan them carefully.\n"
+            "Never cite tags that are not in the provided list. No emojis. Use clear, professional formatting.\n"
+            "You may use conversation history to resolve references.\n"
+            "Punctuation style: write like a careful human editor. NEVER use em dashes, en dashes, or ellipsis characters.\n\n"
+            f"=== RETRIEVED SOURCES ===\n{context_str or 'No source excerpts were retrieved for this question.'}\n"
         )
         logger.info("Grounded prompt constructed with %d context sources.", len(chunks))
         return system_prompt, source_mapping
@@ -247,6 +253,7 @@ class RAGService:
         session_id: uuid.UUID,
         user_message: str,
         provider_name: Optional[str] = None,
+        answer_mode: str = "auto",
         scope_doc_ids: Optional[List[uuid.UUID]] = None,
     ) -> AsyncGenerator[str, None]:
         logger.info(
@@ -268,6 +275,8 @@ class RAGService:
         )
         self.db.commit()
 
+        answer_mode = answer_mode if answer_mode in {"auto", "sources", "general"} else "auto"
+
         # 2. Conversational fast-path (greetings/thanks)
         conversational_response = self.get_conversational_response(user_message)
         if conversational_response:
@@ -277,7 +286,7 @@ class RAGService:
             return
 
         # 2b. Empty-scope guard (when scope is present but empty)
-        if scope_doc_ids is not None and len(scope_doc_ids) == 0:
+        if answer_mode == "sources" and scope_doc_ids is not None and len(scope_doc_ids) == 0:
             msg = (
                 "No sources are wired into this synthesis node yet. "
                 "Connect one or more sources to it, then ask again."
@@ -296,7 +305,7 @@ class RAGService:
         if scope_doc_ids is not None:
             ready_query = ready_query.filter(Document.id.in_(scope_doc_ids))
         ready_doc_count = ready_query.count()
-        if ready_doc_count == 0:
+        if answer_mode == "sources" and ready_doc_count == 0:
             msg = (
                 "I can answer quick AtlasLM questions right now, but grounded "
                 "research answers need at least one ready source. Add a document, "
@@ -308,22 +317,28 @@ class RAGService:
             return
 
         # 4. Retrieval
-        try:
-            chunks = await self.retrieve_relevant_chunks(
-                workspace_id, user_message, provider_name, scope_doc_ids=scope_doc_ids
-            )
-        except ProviderError as e:
-            yield self._sse("error", {"error": e.public_message})
-            return
-        except Exception as e:
-            logger.error("Retrieval failed: %s", e, exc_info=True)
-            yield self._sse(
-                "error",
-                {"error": "AtlasLM could not search your sources right now. Please try again."},
-            )
-            return
+        chunks: List[Dict[str, Any]] = []
+        if answer_mode != "general":
+            try:
+                chunks = await self.retrieve_relevant_chunks(
+                    workspace_id, user_message, provider_name, scope_doc_ids=scope_doc_ids
+                )
+            except ProviderError as e:
+                if answer_mode == "sources":
+                    yield self._sse("error", {"error": e.public_message})
+                    return
+                logger.warning("Optional source retrieval failed, continuing with general knowledge: %s", e)
+            except Exception as e:
+                if answer_mode == "sources":
+                    logger.error("Retrieval failed: %s", e, exc_info=True)
+                    yield self._sse(
+                        "error",
+                        {"error": "AtlasLM could not search your sources right now. Please try again."},
+                    )
+                    return
+                logger.warning("Optional source retrieval failed, continuing with general knowledge: %s", e)
 
-        if not chunks:
+        if answer_mode == "sources" and not chunks:
             msg = "I could not find that information in the uploaded sources."
             yield self._sse("data", {"type": "chunk", "content": msg})
             self._save_assistant(session_id, msg, [])
@@ -331,8 +346,16 @@ class RAGService:
             return
 
         # 5. Prompt + citation metadata
-        system_prompt, source_mapping = self.construct_system_prompt(chunks)
-        yield self._sse("metadata", {"type": "metadata", "sources": source_mapping})
+        system_prompt, source_mapping = self.construct_system_prompt(chunks, answer_mode=answer_mode)
+        yield self._sse(
+            "metadata",
+            {
+                "type": "metadata",
+                "sources": source_mapping,
+                "answer_mode": answer_mode,
+                "has_source_context": bool(chunks),
+            },
+        )
 
         # 6. Build full message list: system + history + current question
         messages = [{"role": "system", "content": system_prompt}]

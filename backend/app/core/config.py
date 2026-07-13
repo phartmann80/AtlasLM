@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     
     # Database
     DATABASE_URL: str = Field(
-        default="postgresql://atlaslm:atlaspass@localhost:5435/atlaslm_db",
+        default="postgresql://atlaslm@localhost:5435/atlaslm_db",
         env="DATABASE_URL"
     )
     REDIS_URL: str = Field(
@@ -59,6 +59,19 @@ class Settings(BaseSettings):
     
     # Active engine routing (server-side only; never exposed to clients)
     ATLAS_ACTIVE_PROVIDER: str = Field(default="langdock", env="ATLAS_ACTIVE_PROVIDER")
+
+    # Capability-specific runtime switches. Keep legacy as the safe default
+    # until the private Mastra service has passed production acceptance.
+    ATLAS_CHAT_RUNTIME: str = Field(default="legacy", env="ATLAS_CHAT_RUNTIME")
+    ATLAS_REPORT_RUNTIME: str = Field(default="legacy", env="ATLAS_REPORT_RUNTIME")
+    ATLAS_RESEARCH_RUNTIME: str = Field(default="legacy", env="ATLAS_RESEARCH_RUNTIME")
+    ATLAS_MEMORY_MODE: str = Field(default="off", env="ATLAS_MEMORY_MODE")
+    ATLAS_TRACE_CONTENT: str = Field(default="redacted", env="ATLAS_TRACE_CONTENT")
+    MASTRA_INTERNAL_URL: str = Field(default="http://127.0.0.1:8110", env="MASTRA_INTERNAL_URL")
+    ATLAS_INTERNAL_SIGNING_SECRET: str = Field(default="", env="ATLAS_INTERNAL_SIGNING_SECRET")
+    ATLAS_INTERNAL_CONTEXT_TTL_SECONDS: int = Field(default=120, env="ATLAS_INTERNAL_CONTEXT_TTL_SECONDS")
+    ATLAS_PUBLIC_BACKEND_URL: str = Field(default="", env="ATLAS_PUBLIC_BACKEND_URL")
+    ATLAS_ALLOWED_ORIGINS: str = Field(default="", env="ATLAS_ALLOWED_ORIGINS")
     
     # Billing & Supabase Admin Gating (Patch 008)
     STRIPE_WEBHOOK_SECRET: str = Field(default="", env="STRIPE_WEBHOOK_SECRET")

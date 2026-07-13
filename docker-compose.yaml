@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: atlaslm
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-atlaspass}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set}
       POSTGRES_DB: atlaslm_db
     ports:
       - "127.0.0.1:5435:5432" # Local-only host access; services use Docker network.
@@ -18,6 +18,13 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    mem_limit: 2g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   redis:
     image: redis:7-alpine
@@ -26,6 +33,18 @@ services:
       - "127.0.0.1:6385:6379" # Local-only host access; services use Docker network.
     volumes:
       - atlaslm_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   backend:
     build:
@@ -33,7 +52,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      - DATABASE_URL=postgresql://atlaslm:${DB_PASSWORD:-atlaspass}@db:5432/atlaslm_db
+      - DATABASE_URL=postgresql://atlaslm:${DB_PASSWORD:?DB_PASSWORD must be set}@db:5432/atlaslm_db
       - REDIS_URL=redis://redis:6379/0
       - LANGDOCK_API_KEY=${LANGDOCK_API_KEY}
       - LANGDOCK_API_CODE=${LANGDOCK_API_CODE}
@@ -52,7 +71,7 @@ services:
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
       - SEARXNG_URL=${SEARXNG_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
-      - RESEARCH_HTTP_TIMEOUT=${RESEARCH_HTTP_TIMEOUT}
+      - RESEARCH_HTTP_TIMEOUT=${RESEARCH_HTTP_TIMEOUT:-12}
       - AUDIO_DIR=${AUDIO_DIR:-/data/audio}
       - ATLAS_TTS_BIN=${ATLAS_TTS_BIN:-piper}
       - ATLAS_VOICE_A=${ATLAS_VOICE_A:-/voices/atlas-host-a.onnx}
@@ -72,8 +91,19 @@ services:
       - ATLAS_INVITE_TTL_SECONDS=${ATLAS_INVITE_TTL_SECONDS:-604800}
       - APP_URL=${APP_URL}
       - ATLAS_DEFAULT_SEAT_LIMIT=${ATLAS_DEFAULT_SEAT_LIMIT:-5}
+      - ATLAS_CHAT_RUNTIME=${ATLAS_CHAT_RUNTIME:-legacy}
+      - ATLAS_REPORT_RUNTIME=${ATLAS_REPORT_RUNTIME:-legacy}
+      - ATLAS_RESEARCH_RUNTIME=${ATLAS_RESEARCH_RUNTIME:-legacy}
+      - ATLAS_MEMORY_MODE=${ATLAS_MEMORY_MODE:-off}
+      - ATLAS_TRACE_CONTENT=${ATLAS_TRACE_CONTENT:-redacted}
+      - MASTRA_INTERNAL_URL=${MASTRA_INTERNAL_URL:-http://mastra:8110}
+      - ATLAS_INTERNAL_SIGNING_SECRET=${ATLAS_INTERNAL_SIGNING_SECRET}
+      - ATLAS_PUBLIC_BACKEND_URL=${ATLAS_PUBLIC_BACKEND_URL}
+      - ATLAS_ALLOWED_ORIGINS=${ATLAS_ALLOWED_ORIGINS}
     ports:
-      - "8080:8000"
+      - "127.0.0.1:8080:8000"
+    expose:
+      - "8000"
     volumes:
       - atlaslm_audio:/data/audio
     depends_on:
@@ -81,6 +111,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 2g
+    cpus: 2.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   worker:
     build:
@@ -88,7 +130,7 @@ services:
       dockerfile: Dockerfile
     command: python -m app.worker
     environment:
-      - DATABASE_URL=postgresql://atlaslm:${DB_PASSWORD:-atlaspass}@db:5432/atlaslm_db
+      - DATABASE_URL=postgresql://atlaslm:${DB_PASSWORD:?DB_PASSWORD must be set}@db:5432/atlaslm_db
       - REDIS_URL=redis://redis:6379/0
       - LANGDOCK_API_KEY=${LANGDOCK_API_KEY}
       - LANGDOCK_API_CODE=${LANGDOCK_API_CODE}
@@ -107,7 +149,7 @@ services:
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
       - SEARXNG_URL=${SEARXNG_URL}
       - SEARXNG_SECRET=${SEARXNG_SECRET}
-      - RESEARCH_HTTP_TIMEOUT=${RESEARCH_HTTP_TIMEOUT}
+      - RESEARCH_HTTP_TIMEOUT=${RESEARCH_HTTP_TIMEOUT:-12}
       - AUDIO_DIR=${AUDIO_DIR:-/data/audio}
       - ATLAS_TTS_BIN=${ATLAS_TTS_BIN:-piper}
       - ATLAS_VOICE_A=${ATLAS_VOICE_A:-/voices/atlas-host-a.onnx}
@@ -127,28 +169,89 @@ services:
       - ATLAS_INVITE_TTL_SECONDS=${ATLAS_INVITE_TTL_SECONDS:-604800}
       - APP_URL=${APP_URL}
       - ATLAS_DEFAULT_SEAT_LIMIT=${ATLAS_DEFAULT_SEAT_LIMIT:-5}
+      - ATLAS_CHAT_RUNTIME=${ATLAS_CHAT_RUNTIME:-legacy}
+      - ATLAS_REPORT_RUNTIME=${ATLAS_REPORT_RUNTIME:-legacy}
+      - ATLAS_RESEARCH_RUNTIME=${ATLAS_RESEARCH_RUNTIME:-legacy}
+      - ATLAS_MEMORY_MODE=${ATLAS_MEMORY_MODE:-off}
+      - ATLAS_TRACE_CONTENT=${ATLAS_TRACE_CONTENT:-redacted}
+      - MASTRA_INTERNAL_URL=${MASTRA_INTERNAL_URL:-http://mastra:8110}
+      - ATLAS_INTERNAL_SIGNING_SECRET=${ATLAS_INTERNAL_SIGNING_SECRET}
     volumes:
       - atlaslm_audio:/data/audio
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from app.services.jobs import redis_healthy; raise SystemExit(0 if redis_healthy() else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     restart: unless-stopped
+    mem_limit: 2g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  mastra:
+    build:
+      context: ./mastra
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - PORT=8110
+      - ATLAS_API_URL=${ATLAS_API_URL:-http://backend:8000}
+      - GATEWAY_API_URL=${GATEWAY_API_URL:-https://gateway-api.mastra.ai}
+      - GATEWAY_API_MASTRA_KEY=${GATEWAY_API_MASTRA_KEY}
+      - MASTRA_MODEL=${MASTRA_MODEL:-openai/gpt-5-mini}
+    expose:
+      - "8110"
+    depends_on:
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8110/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 1g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8080
       - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
       - NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
     ports:
-      - "3010:3000" # Mapped to port 3010 as routed by Nginx
+      - "127.0.0.1:3010:3000" # Local-only; public traffic must flow through Nginx or Vercel.
     depends_on:
       - backend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    mem_limit: 1g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 volumes:
   atlaslm_data:
