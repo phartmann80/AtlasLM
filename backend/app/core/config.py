@@ -5,6 +5,7 @@ from pydantic import Field
 class Settings(BaseSettings):
     PROJECT_NAME: str = "AtlasLM"
     API_V1_STR: str = "/api/v1"
+    ATLAS_ENV: str = Field(default="dev", env="ATLAS_ENV")
     
     # Database
     DATABASE_URL: str = Field(
