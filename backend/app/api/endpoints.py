@@ -599,22 +599,41 @@ async def chat_stream(
             idempotency_key=None,
             metadata={"session_id": str(session_id), "mode": message.mode},
         )
+        run_context = {
+            "run_id": run.id,
+            "user_id": run.user_id,
+            "workspace_id": run.workspace_id,
+            "notebook_id": run.notebook_id,
+            "request_id": run.request_id,
+            "trace_id": run.trace_id,
+        }
         append_run_event(db, run, "dispatch", "running", 15, "Sending the grounded question to Mastra")
 
         async def proxy():
             try:
                 async for chunk in stream_mastra_chat(
-                    run=run,
+                    **run_context,
                     session_id=session_id,
                     question=message.content,
                     source_ids=scope,
                     mode=message.mode,
                 ):
                     yield chunk
-                append_run_event(db, run, "saved", "completed", 100, "Conversation saved")
+                completed_run = db.query(AIRun).filter(AIRun.id == run_context["run_id"]).first()
+                if completed_run:
+                    completed_run.status = "completed"
+                    completed_run.latency_ms = 0
+                    db.commit()
+                    append_run_event(db, completed_run, "saved", "completed", 100, "Conversation saved")
             except AIRuntimeError as exc:
                 db.rollback()
-                append_run_event(db, run, "failed", "failed", 100, str(exc), {"error_code": exc.code})
+                failed_run = db.query(AIRun).filter(AIRun.id == run_context["run_id"]).first()
+                if failed_run:
+                    failed_run.status = "failed"
+                    failed_run.error_code = exc.code
+                    failed_run.error_message = str(exc)
+                    db.commit()
+                    append_run_event(db, failed_run, "failed", "failed", 100, str(exc), {"error_code": exc.code})
                 yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n".encode("utf-8")
 
         return StreamingResponse(proxy(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

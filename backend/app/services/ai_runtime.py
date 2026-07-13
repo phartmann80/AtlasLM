@@ -279,7 +279,12 @@ async def call_mastra_report(
 
 async def stream_mastra_chat(
     *,
-    run: AIRun,
+    run_id: uuid.UUID,
+    user_id: str,
+    workspace_id: uuid.UUID,
+    notebook_id: uuid.UUID,
+    request_id: str | None,
+    trace_id: str | None,
     session_id: uuid.UUID,
     question: str,
     source_ids: list[uuid.UUID] | None,
@@ -287,25 +292,25 @@ async def stream_mastra_chat(
 ):
     """Proxy Mastra SSE through FastAPI so the browser never sees Mastra."""
     context = {
-        "userId": run.user_id,
-        "workspaceId": str(run.workspace_id),
-        "notebookId": str(run.notebook_id),
-        "requestId": run.request_id,
-        "traceId": run.trace_id,
+        "userId": user_id,
+        "workspaceId": str(workspace_id),
+        "notebookId": str(notebook_id),
+        "requestId": request_id,
+        "traceId": trace_id,
         "exp": int(time.time()) + settings.ATLAS_INTERNAL_CONTEXT_TTL_SECONDS,
     }
     encoded, signature = sign_internal_context(context)
     headers = {
         "X-Atlas-Internal-Context": encoded,
         "X-Atlas-Internal-Signature": signature,
-        "X-Request-ID": run.trace_id or "atlas",
+        "X-Request-ID": trace_id or "atlas",
     }
     payload = {
         "sessionId": str(session_id),
         "question": question,
         "sourceIds": [str(source_id) for source_id in source_ids] if source_ids is not None else None,
         "mode": mode,
-        "traceId": run.trace_id,
+        "traceId": trace_id,
     }
     try:
         async with httpx.AsyncClient(timeout=None) as client:
@@ -318,10 +323,5 @@ async def stream_mastra_chat(
                 response.raise_for_status()
                 async for chunk in response.aiter_bytes():
                     yield chunk
-        run.status = "completed"
-        run.latency_ms = 0
     except Exception as exc:
-        run.status = "failed"
-        run.error_code = "mastra_chat_failed"
-        run.error_message = "Atlas could not complete the research answer."
-        raise AIRuntimeError(run.error_message, run.error_code) from exc
+        raise AIRuntimeError("Atlas could not complete the research answer.", "mastra_chat_failed") from exc
