@@ -27,6 +27,7 @@ class Document(Base):
     filename = Column(String(255), nullable=False)
     file_type = Column(String(50), nullable=False) # 'pdf', 'txt', 'md', 'url'
     source_url = Column(String(2083), nullable=True)
+    idempotency_key = Column(String(255), nullable=True, index=True)
     embedding_model = Column(String(120), nullable=True)
     status = Column(String(20), nullable=False, default="ready", server_default="ready")
     error_message = Column(Text, nullable=True)

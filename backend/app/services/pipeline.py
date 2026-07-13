@@ -323,6 +323,7 @@ class DocumentPipeline:
         filename,
         file_type,
         source_url=None,
+        idempotency_key=None,
     ):
         import uuid as _uuid
         from ..models import Document
@@ -332,6 +333,7 @@ class DocumentPipeline:
             filename=filename,
             file_type=file_type,
             source_url=source_url,
+            idempotency_key=idempotency_key,
             status="processing",
             error_message=None,
         )
@@ -407,6 +409,7 @@ class DocumentPipeline:
         source_url: Optional[str] = None,
         provider_name: Optional[str] = None,
         language: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
         chunk_size: int = 800,
         chunk_overlap: int = 150,
     ) -> Document:
@@ -457,6 +460,7 @@ class DocumentPipeline:
                 filename=filename,
                 file_type=file_type,
                 source_url=source_url,
+                idempotency_key=idempotency_key,
                 embedding_model=embedding_model_id,
                 status="ready",
             )

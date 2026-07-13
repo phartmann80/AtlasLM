@@ -14,6 +14,8 @@ def main() -> None:
         "create table if not exists ai_run_events",
         "create table if not exists workspace_layouts",
         "alter table chat_messages add column if not exists runtime",
+        "alter table documents add column if not exists idempotency_key",
+        "idx_documents_workspace_idempotency",
         "alter table studio_outputs add column if not exists run_id",
         "alter table studio_output_citations add column if not exists chunk_id",
     ]

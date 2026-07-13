@@ -55,6 +55,11 @@ ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS trace_id TEXT;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS source_scope JSONB;
 CREATE INDEX IF NOT EXISTS idx_chat_messages_trace ON chat_messages (trace_id);
 
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_workspace_idempotency
+    ON documents (workspace_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
 ALTER TABLE studio_outputs ADD COLUMN IF NOT EXISTS run_id UUID REFERENCES ai_runs(id) ON DELETE SET NULL;
 ALTER TABLE studio_outputs ADD COLUMN IF NOT EXISTS runtime VARCHAR(32) NOT NULL DEFAULT 'legacy';
 ALTER TABLE studio_outputs ADD COLUMN IF NOT EXISTS source_scope JSONB;

@@ -82,6 +82,36 @@ def _get_owned_workspace(workspace_id: uuid.UUID, user_id: str, db: Session) -> 
     return ws
 
 
+def _request_idempotency_key(request: Request) -> str | None:
+    key = (
+        request.headers.get("Idempotency-Key")
+        or request.headers.get("X-Idempotency-Key")
+        or ""
+    ).strip()
+    if not key:
+        return None
+    if len(key) > 255:
+        raise HTTPException(status_code=400, detail="Idempotency key is too long.")
+    return key
+
+
+def _existing_idempotent_document(
+    db: Session,
+    workspace_id: uuid.UUID,
+    idempotency_key: str | None,
+) -> Document | None:
+    if not idempotency_key:
+        return None
+    return (
+        db.query(Document)
+        .filter(
+            Document.workspace_id == workspace_id,
+            Document.idempotency_key == idempotency_key,
+        )
+        .first()
+    )
+
+
 def _normalize_public_url(raw_url: str) -> str:
     url = raw_url.strip()
     if not url:
@@ -253,6 +283,10 @@ async def upload_document(
 ):
     uid = current_user_id(request)
     _get_owned_workspace(workspace_id, uid, db)
+    idempotency_key = _request_idempotency_key(request)
+    existing = _existing_idempotent_document(db, workspace_id, idempotency_key)
+    if existing:
+        return existing
 
     # Validate file size (50 MB limit)
     MAX_FILE_SIZE = 50 * 1024 * 1024
@@ -304,6 +338,7 @@ async def upload_document(
             workspace_id=workspace_id,
             filename=filename,
             file_type=file_type,
+            idempotency_key=idempotency_key,
         )
         try:
             enqueue_ingestion_job(
@@ -332,6 +367,7 @@ async def upload_document(
             file_bytes=file_bytes,
             file_type=file_type,
             language=transcription_language,
+            idempotency_key=idempotency_key,
         )
         return doc
     except ProviderError as e:
@@ -355,6 +391,10 @@ async def ingest_url(
 ):
     uid = current_user_id(request)
     _get_owned_workspace(workspace_id, uid, db)
+    idempotency_key = _request_idempotency_key(request)
+    existing = _existing_idempotent_document(db, workspace_id, idempotency_key)
+    if existing:
+        return existing
 
     url = _normalize_public_url(str(body.url))
 
@@ -400,6 +440,7 @@ async def ingest_url(
             filename=filename,
             file_type="url",
             source_url=url,
+            idempotency_key=idempotency_key,
         )
         try:
             enqueue_ingestion_job(
@@ -427,6 +468,7 @@ async def ingest_url(
             file_bytes=html_bytes,
             file_type="url",
             source_url=url,
+            idempotency_key=idempotency_key,
         )
         return doc
     except ProviderError as e:
@@ -450,6 +492,10 @@ async def ingest_text(
 ):
     uid = current_user_id(request)
     _get_owned_workspace(workspace_id, uid, db)
+    idempotency_key = _request_idempotency_key(request)
+    existing = _existing_idempotent_document(db, workspace_id, idempotency_key)
+    if existing:
+        return existing
 
     title = body.title.strip()
     content = body.content.strip()
@@ -471,6 +517,7 @@ async def ingest_text(
             filename=f"{title} (Pasted Text)",
             file_bytes=file_bytes,
             file_type="text",
+            idempotency_key=idempotency_key,
         )
         return doc
     except ProviderError as e:
@@ -1236,6 +1283,10 @@ async def ingest_youtube(
 ):
     uid = current_user_id(request)
     _get_owned_workspace(workspace_id, uid, db)
+    idempotency_key = _request_idempotency_key(request)
+    existing = _existing_idempotent_document(db, workspace_id, idempotency_key)
+    if existing:
+        return existing
 
     url = _normalize_public_url(str(body.url))
     try:
@@ -1286,6 +1337,7 @@ async def ingest_youtube(
             filename=filename,
             file_type="youtube",
             source_url=canonical_url,
+            idempotency_key=idempotency_key,
         )
         try:
             enqueue_ingestion_job(
@@ -1315,6 +1367,7 @@ async def ingest_youtube(
             file_type="youtube",
             source_url=canonical_url,
             language=transcription_language,
+            idempotency_key=idempotency_key,
         )
         return doc
     except ProviderError as e:

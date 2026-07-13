@@ -12,6 +12,9 @@ ALTER TABLE chat_messages DROP COLUMN IF EXISTS source_scope;
 ALTER TABLE chat_messages DROP COLUMN IF EXISTS trace_id;
 ALTER TABLE chat_messages DROP COLUMN IF EXISTS runtime;
 
+DROP INDEX IF EXISTS idx_documents_workspace_idempotency;
+ALTER TABLE documents DROP COLUMN IF EXISTS idempotency_key;
+
 ALTER TABLE studio_outputs DROP COLUMN IF EXISTS idempotency_key;
 ALTER TABLE studio_outputs DROP COLUMN IF EXISTS progress;
 ALTER TABLE studio_outputs DROP COLUMN IF EXISTS version;
