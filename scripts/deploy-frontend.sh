@@ -25,6 +25,8 @@ test -r "$ENV_FILE"
 test -f "$COMPOSE_FILE"
 test -f "$RELEASE_DIR/frontend/Dockerfile"
 
+cd "$RELEASE_DIR"
+
 export ATLAS_FRONTEND_IMAGE="$IMAGE"
 export ATLAS_FRONTEND_PORT="$FRONTEND_PORT"
 

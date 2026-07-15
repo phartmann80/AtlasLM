@@ -20,6 +20,8 @@ test -r "$ENV_FILE"
 test -f "$COMPOSE_FILE"
 docker image inspect "$IMAGE" >/dev/null
 
+cd "$RELEASE_DIR"
+
 export ATLAS_FRONTEND_IMAGE="$IMAGE"
 export ATLAS_FRONTEND_PORT="$FRONTEND_PORT"
 
