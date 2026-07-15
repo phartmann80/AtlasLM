@@ -47,10 +47,10 @@ export default function AndroidDownloadPage() {
       <Header />
 
       <main className="flex-grow pt-32 pb-24 px-6 max-w-6xl mx-auto relative z-10 w-full flex flex-col items-center">
-        
+
         {/* Back Link */}
-        <Link 
-          href="/" 
+        <Link
+          href="/"
           className="inline-flex items-center gap-2 text-zinc-500 hover:text-white transition-colors duration-200 self-start mb-8 text-sm group"
         >
           <span className="transform group-hover:-translate-x-1 transition-transform"><ArrowLeft /></span>
@@ -58,7 +58,7 @@ export default function AndroidDownloadPage() {
         </Link>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center w-full">
-          
+
           {/* Left Column: Premium App Description */}
           <div className="flex flex-col text-left">
             <motion.div
@@ -219,7 +219,7 @@ export default function AndroidDownloadPage() {
                     <div className="self-end bg-zinc-900 border border-zinc-800/80 rounded-xl rounded-br-none p-2.5 max-w-[85%] text-left">
                       <p className="text-[8px] text-zinc-300">How does AtlasLM ensure absolute source grounding?</p>
                     </div>
-                    
+
                     <div className="self-start bg-orange-950/10 border border-orange-500/10 rounded-xl rounded-bl-none p-2.5 max-w-[90%] text-left relative">
                       <p className="text-[8px] text-zinc-300 leading-normal">
                         AtlasLM splits source PDFs into deterministic chunks with offset metadata. The vector database restricts queries strictly to these chunks, enforcing inline page citations <span className="inline-flex px-1 bg-orange-500/25 border border-orange-500/30 text-orange-400 rounded text-[6px] font-bold">p.4</span> to ensure verifiable accuracy.
