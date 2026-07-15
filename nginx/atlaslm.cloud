@@ -28,6 +28,9 @@ server {
     ssl_session_timeout 1d;
     ssl_session_tickets off;
 
+    server_tokens off;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+
     return 308 https://www.atlaslm.cloud$request_uri;
 }
 
