@@ -1,20 +1,32 @@
 FROM node:20-alpine
 
-
 WORKDIR /workspace
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY . .
 
-# Run punctuation linting check
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG NEXT_PUBLIC_API_BASE=/api/v1
+
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+ENV NEXT_TELEMETRY_DISABLED=1
+
 RUN sh lint_no_ai_punctuation.sh
 
-# Environment flag for production compilation
 ENV NODE_ENV=production
 RUN npm run build
+RUN npm prune --omit=dev && chown -R node:node /workspace
+
+USER node
 
 EXPOSE 3000
+
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 
 CMD ["npm", "run", "start"]

@@ -230,21 +230,30 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:?NEXT_PUBLIC_SUPABASE_ANON_KEY must be set}
+        NEXT_PUBLIC_API_BASE: /api/v1
+    image: ${ATLAS_FRONTEND_IMAGE:-atlaslm-frontend:self-hosted}
     restart: unless-stopped
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8080
-      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
-      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
-      - NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
+      - NODE_ENV=production
+      - ATLAS_BACKEND_URL=${ATLAS_FRONTEND_BACKEND_URL:-https://api.atlaslm.cloud}
+      - ATLAS_GATEWAY_NAME=self-hosted
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:?NEXT_PUBLIC_SUPABASE_ANON_KEY must be set}
+      - NEXT_PUBLIC_API_BASE=/api/v1
     ports:
-      - "127.0.0.1:3010:3000" # Local-only; public traffic must flow through Nginx or Vercel.
+      - "127.0.0.1:3010:3000" # Local-only; public traffic flows through Nginx.
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
     mem_limit: 1g
     cpus: 1.0
     logging:

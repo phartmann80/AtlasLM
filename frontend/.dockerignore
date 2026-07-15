@@ -4,3 +4,7 @@ out
 build
 .git
 .gitignore
+.vercel
+.env
+.env.*
+*.log

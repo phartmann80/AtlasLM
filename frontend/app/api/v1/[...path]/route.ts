@@ -8,10 +8,7 @@ type RouteContext = {
   params: Promise<{ path?: string[] }>;
 };
 
-const BLOCKED_TARGETS = [
-  "localhost",
-  "127.0.0.1",
-];
+const BLOCKED_TARGETS = ["localhost", "127.0.0.1"];
 
 function configuredBackend(): string | null {
   const raw =
@@ -46,7 +43,10 @@ function proxyHeaders(request: Request): Headers {
     "transfer-encoding",
     "upgrade",
   ].forEach((name) => headers.delete(name));
-  headers.set("x-atlaslm-gateway", "vercel");
+  headers.set(
+    "x-atlaslm-gateway",
+    process.env.ATLAS_GATEWAY_NAME?.trim() || "self-hosted",
+  );
   return headers;
 }
 

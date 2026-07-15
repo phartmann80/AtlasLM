@@ -1,100 +1,68 @@
-# Nginx configuration for AtlasLM (atlaslm.cloud & www.atlaslm.cloud)
-# Place in /etc/nginx/sites-available/ and symlink to /etc/nginx/sites-enabled/
+# AtlasLM self-hosted frontend.
+# Public boundary: 80/443 Nginx -> Next.js on 127.0.0.1:3010.
 
-# Redirect HTTP to HTTPS
 server {
     listen 80;
     listen [::]:80;
     server_name atlaslm.cloud www.atlaslm.cloud;
-    
-    # Let's Encrypt renewal location
+
     location /.well-known/acme-challenge/ {
         root /var/www/html;
     }
 
     location / {
-        return 301 https://$host$request_uri;
+        return 308 https://www.atlaslm.cloud$request_uri;
     }
 }
 
-# Dedicated backend hostname used by the Vercel frontend.
-# Create the DNS record api.atlaslm.cloud -> 212.227.44.13 and obtain the
-# matching Let's Encrypt certificate before enabling this server block.
 server {
-    listen 80;
-    listen [::]:80;
-    server_name api.atlaslm.cloud;
-    location /.well-known/acme-challenge/ { root /var/www/html; }
-    location / { return 301 https://$host$request_uri; }
-}
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name atlaslm.cloud;
 
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-    server_name api.atlaslm.cloud;
-
-    ssl_certificate /etc/letsencrypt/live/api.atlaslm.cloud/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.atlaslm.cloud/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-
-    add_header X-Frame-Options "DENY" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-
-    client_max_body_size 50M;
-    location ^~ /internal/atlas/ {
-        return 404;
-    }
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 300s;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
-
-# Production HTTPS server block
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-    server_name atlaslm.cloud www.atlaslm.cloud;
-
-    # SSL Certificates (Managed by Certbot)
     ssl_certificate /etc/letsencrypt/live/atlaslm.cloud/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/atlaslm.cloud/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:atlaslm_frontend_ssl:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
 
-    # Security Headers
-    add_header X-Frame-Options "DENY" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none';" always;
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    return 308 https://www.atlaslm.cloud$request_uri;
+}
 
-    # Ingestion Upload Limit for Large PDFs (50MB)
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name www.atlaslm.cloud;
+
+    ssl_certificate /etc/letsencrypt/live/atlaslm.cloud/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/atlaslm.cloud/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:atlaslm_frontend_ssl:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    server_tokens off;
     client_max_body_size 50M;
 
-    # Gzip / Compression Settings
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss:; frame-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https:;" always;
+
     gzip on;
     gzip_proxied any;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
     gzip_comp_level 5;
 
-    # 1. Frontend Next.js Web App (Listening on port 3010)
+    location ^~ /internal/atlas/ {
+        return 404;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:3010;
         proxy_http_version 1.1;
@@ -102,30 +70,11 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
-        # WebSockets & SSE upgrades
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_cache_bypass $http_upgrade;
-    }
-
-    # 2. Backend FastAPI Server (Listening on port 8080)
-    location /api/v1/ {
-        proxy_pass http://127.0.0.1:8080/api/v1/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Disable buffering specifically for SSE text/event-stream chunk streaming
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 300s;
-        
-        # WebSockets & SSE upgrades
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_cache_bypass $http_upgrade;
+        proxy_send_timeout 300s;
     }
 }
