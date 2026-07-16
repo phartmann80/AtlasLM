@@ -1,0 +1,36 @@
+# Patch 016A - Production overlay that adds the Caddy TLS proxy for atlaslm.cloud.
+# Use alongside your existing docker-compose.yaml:
+#   docker compose -f docker-compose.yaml -f docker-compose.prod.yaml up -d
+#
+# Caddy terminates HTTPS for atlaslm.cloud and proxies to frontend + backend.
+# It obtains and renews Let's Encrypt certs automatically.
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - default
+
+  # Frontend and backend are expected to exist in the base compose file.
+  # They are referenced here only to ensure Caddy can reach them by service name.
+  frontend:
+    expose:
+      - "3000"
+  backend:
+    expose:
+      - "8000"
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,29 @@
+# Patch 016A - Caddy reverse proxy for atlaslm.cloud
+# Auto-provisions and renews Let's Encrypt TLS. No manual cert steps.
+# DNS for atlaslm.cloud already points to 85.215.225.0, which is all Caddy needs.
+
+atlaslm.cloud, www.atlaslm.cloud {
+	encode zstd gzip
+
+	# Frontend (Next.js)
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	# Backend API
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}
+
+# Redirect bare api host to the app if you later split it out.
+# api.atlaslm.cloud {
+# 	reverse_proxy backend:8000
+# }
