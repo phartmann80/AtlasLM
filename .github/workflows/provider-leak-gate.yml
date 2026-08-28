@@ -19,6 +19,11 @@ jobs:
       MASTRA_MODEL: atlas-internal
       LANGDOCK_MODEL: atlas-internal
       LANGDOCK_ENDPOINT_URL: http://127.0.0.1:9/v1
+      LANGDOCK_API_KEY: ci-unset
+      LANGDOCK_API_CODE: ci-unset
+      OPENROUTER_API_KEY: ci-unset
+      OPENAI_API_KEY: ci-unset
+      GEMINI_API_KEY: ci-unset
       ATLAS_ACTIVE_PROVIDER: local
     steps:
       - uses: actions/checkout@v7

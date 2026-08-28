@@ -21,7 +21,9 @@ if [ -f "run_api_verification.py" ]; then
 fi
 
 echo "[leak-gate] capturing docker logs to ${LOGFILE}..."
-docker compose logs --no-color > "${LOGFILE}" 2>&1 || true
+# Container stdout/stderr is compose's stdout. Compose CLI interpolation
+# warnings go to stderr and must not be mixed into the leak audit.
+docker compose logs --no-color > "${LOGFILE}" 2>/tmp/atlaslm_compose_cli.txt || true
 
 echo "[leak-gate] running provider leak audit (build-failing)..."
 sh "${HERE}/scripts/check_provider_leak.sh" "${LOGFILE}"
