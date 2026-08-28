@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, R
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
 import json
 import re
 
@@ -26,6 +27,7 @@ from ..services.youtube_extract import (
 from ..services.ingest.youtube_loader import load_youtube
 from ..services.transcription_language import normalize_transcription_language
 from ..services.pipeline import DocumentPipeline
+from ..services.safe_fetch import PublicFetchError, download_public_html, normalize_public_http_url
 from ..services.rag import RAGService
 from ..core.providers import provider_registry, ProviderError
 from ..services.jobs import enqueue_ingestion_job, enqueue_studio_job, redis_healthy
@@ -82,6 +84,33 @@ def _get_owned_workspace(workspace_id: uuid.UUID, user_id: str, db: Session) -> 
     return ws
 
 
+def _get_owned_document(document_id: uuid.UUID, user_id: str, db: Session) -> Document:
+    """Fetch a document in a workspace owned by this user, or raise 404."""
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        _get_owned_workspace(doc.workspace_id, user_id, db)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail="Document not found")
+        raise
+    return doc
+
+
+def _get_owned_session(session_id: uuid.UUID, user_id: str, db: Session) -> ChatSession:
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    try:
+        _get_owned_workspace(session.workspace_id, user_id, db)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        raise
+    return session
+
+
 def _request_idempotency_key(request: Request) -> str | None:
     key = (
         request.headers.get("Idempotency-Key")
@@ -113,14 +142,66 @@ def _existing_idempotent_document(
 
 
 def _normalize_public_url(raw_url: str) -> str:
-    url = raw_url.strip()
-    if not url:
-        raise HTTPException(status_code=400, detail="URL is required")
-    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
-        url = f"https://{url}"
-    if not url.lower().startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
-    return url
+    try:
+        return normalize_public_http_url(raw_url)
+    except PublicFetchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+async def _download_public_html(url: str) -> bytes:
+    try:
+        return await download_public_html(url)
+    except PublicFetchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="AtlasLM could not reach that URL. Check the address and try again.",
+        )
+
+
+async def _youtube_ingest_payload(url: str, language: Optional[str]) -> Dict[str, Any]:
+    try:
+        transcription_language = normalize_transcription_language(language)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        result = await extract_youtube_transcript(url, language=transcription_language)
+    except YouTubeExtractError as primary_error:
+        try:
+            blocks = await asyncio.to_thread(
+                load_youtube,
+                url,
+                transcription_language,
+            )
+            transcript_text = _blocks_to_transcript_markdown(blocks)
+            if not transcript_text:
+                raise ValueError("No transcript text was produced.")
+            video_id = extract_video_id(url) or "video"
+            result = {
+                "text": transcript_text,
+                "title": f"YouTube {video_id}",
+                "video_id": video_id,
+                "language": transcription_language or "auto",
+            }
+        except Exception:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "AtlasLM could not extract or transcribe this YouTube video. "
+                    "It may be private, blocked, or the backend media transcription "
+                    f"tools may be unavailable. Caption error: {str(primary_error)}"
+                ),
+            )
+    return {
+        "filename": f"{result['title'][:200]} (YouTube)",
+        "file_bytes": result["text"].encode("utf-8"),
+        "canonical_url": f"https://www.youtube.com/watch?v={result['video_id']}",
+        "language": transcription_language,
+    }
 
 
 def _format_seconds(seconds: float) -> str:
@@ -397,39 +478,8 @@ async def ingest_url(
         return existing
 
     url = _normalize_public_url(str(body.url))
-
     filename = url.replace("https://", "").replace("http://", "").split("/")[0] + " (Web)"
-
-    import httpx
-    try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(
-                url,
-                timeout=15.0,
-                follow_redirects=True,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; AtlasLM/1.0; +https://atlaslm.app)",
-                    "Accept": "text/html,application/xhtml+xml",
-                },
-            )
-            res.raise_for_status()
-            content_type = res.headers.get("content-type", "")
-            if "text/html" not in content_type and "xml" not in content_type and content_type:
-                raise HTTPException(
-                    status_code=422,
-                    detail="The URL did not return a web page. Only HTML pages are supported for now.",
-                )
-            html_text = res.text
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail="AtlasLM could not reach that URL. Check the address and try again.",
-        )
-
-    MAX_HTML_SIZE = 10 * 1024 * 1024
-    html_bytes = html_text.encode("utf-8")[:MAX_HTML_SIZE]
+    html_bytes = await _download_public_html(url)
 
     pipeline = DocumentPipeline(db)
 
@@ -550,6 +600,116 @@ def delete_document(
     return
 
 
+class DocumentRetryRequest(BaseModel):
+    language: Optional[str] = None
+
+
+@router.post(
+    "/documents/{document_id}/retry",
+    response_model=DocumentOut,
+)
+async def retry_document(
+    request: Request,
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    body: Optional[DocumentRetryRequest] = None,
+):
+    """Requeue the same authorized document. Never deletes the failed record."""
+    uid = current_user_id(request)
+    doc = _get_owned_document(document_id, uid, db)
+    idempotency_key = _request_idempotency_key(request)
+    previous_error = doc.error_message
+
+    if doc.status in {"pending", "processing"}:
+        return doc
+    if doc.status == "ready":
+        return doc
+
+    kind = (doc.file_type or "").lower()
+    if kind not in {"url", "youtube"} or not doc.source_url:
+        raise HTTPException(
+            status_code=422,
+            detail="Re-add this file to retry. AtlasLM does not keep the original upload for retry.",
+        )
+
+    if idempotency_key:
+        doc.idempotency_key = idempotency_key
+
+    language = body.language if body else None
+    try:
+        if kind == "youtube":
+            payload = await _youtube_ingest_payload(doc.source_url, language)
+            filename = payload["filename"]
+            file_bytes = payload["file_bytes"]
+            source_url = payload["canonical_url"]
+            transcription_language = payload["language"]
+            doc.filename = filename
+            doc.source_url = source_url
+        else:
+            file_bytes = await _download_public_html(doc.source_url)
+            filename = doc.filename
+            source_url = doc.source_url
+            transcription_language = None
+    except HTTPException as exc:
+        doc.status = "failed"
+        doc.error_message = str(exc.detail) if exc.detail else previous_error
+        db.commit()
+        db.refresh(doc)
+        raise
+
+    doc.status = "processing"
+    db.commit()
+    db.refresh(doc)
+
+    pipeline = DocumentPipeline(db)
+    if redis_healthy():
+        try:
+            enqueue_ingestion_job(
+                document_id=doc.id,
+                workspace_id=doc.workspace_id,
+                filename=filename,
+                file_type=doc.file_type,
+                file_bytes=file_bytes,
+                source_url=source_url,
+                language=transcription_language,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content=jsonable_encoder(DocumentOut.model_validate(doc)),
+            )
+        except Exception:
+            pass
+
+    try:
+        await pipeline.run_ingestion_for_document(
+            doc,
+            file_bytes,
+            doc.file_type,
+            language=transcription_language,
+        )
+        doc.status = "ready"
+        doc.error_message = None
+        db.commit()
+        db.refresh(doc)
+        return doc
+    except Exception:
+        db.rollback()
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        doc.status = "failed"
+        doc.error_message = (
+            previous_error
+            or "Atlas could not retry that source. The original record is unchanged."
+        )
+        db.commit()
+        db.refresh(doc)
+        raise HTTPException(
+            status_code=400,
+            detail=doc.error_message or "Atlas could not retry that source. The original record is unchanged.",
+        )
+
+
 # -- Chat Session Endpoints ----------------------------------------------------
 
 @router.get("/workspaces/{workspace_id}/sessions", response_model=List[ChatSessionOut])
@@ -597,18 +757,21 @@ def get_session_details(
     db: Session = Depends(get_db),
 ):
     uid = current_user_id(request)
-    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Chat session not found")
-    # Verify ownership via the owning workspace but do not leak workspace existence.
-    try:
-        _get_owned_workspace(session.workspace_id, uid, db)
-    except HTTPException as exc:
-        if exc.status_code == 404:
-            # Either the workspace does not exist or it is not owned by this user.
-            raise HTTPException(status_code=404, detail="Chat session not found")
-        raise
+    session = _get_owned_session(session_id, uid, db)
     return session
+
+
+@router.delete("/sessions/{session_id}/messages", status_code=status.HTTP_204_NO_CONTENT)
+def clear_session_messages(
+    request: Request,
+    session_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    uid = current_user_id(request)
+    session = _get_owned_session(session_id, uid, db)
+    db.query(ChatMessage).filter(ChatMessage.session_id == session.id).delete()
+    db.commit()
+    return
 
 
 # -- Streaming RAG Chat Endpoint -----------------------------------------------
@@ -743,13 +906,56 @@ def get_available_providers():
 
 @router.get("/studio/types")
 def list_studio_types():
-    """Available Studio output types (drives the frontend Studio panel)."""
+    """Studio capabilities the dashboard may render.
+
+    Only enabled types may be started from the UI. Disabled entries stay
+    visible as planned so the dashboard never pretends an unfinished
+    generator is live.
+    """
+    planned = "This Studio tool will be enabled after the notebook-to-report review."
     return {
         "types": [
-            {"id": "mind_map", "label": "Mind Map"},
-            {"id": "study_guide", "label": "Study Guide"},
-            {"id": "quiz", "label": "Quiz"},
-            {"id": "flashcards", "label": "Flashcards"},
+            {
+                "id": "report",
+                "label": "Report",
+                "detail": "Citation-backed report from ready sources",
+                "enabled": True,
+            },
+            {
+                "id": "study_guide",
+                "label": "Study Guide",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
+            {
+                "id": "mind_map",
+                "label": "Mind Map",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
+            {
+                "id": "quiz",
+                "label": "Quiz",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
+            {
+                "id": "flashcards",
+                "label": "Flashcards",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
+            {
+                "id": "audio_overview",
+                "label": "Audio Overview",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
         ]
     }
 
@@ -1289,44 +1495,11 @@ async def ingest_youtube(
         return existing
 
     url = _normalize_public_url(str(body.url))
-    try:
-        transcription_language = normalize_transcription_language(body.language)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    try:
-        result = await extract_youtube_transcript(url, language=transcription_language)
-    except YouTubeExtractError as primary_error:
-        try:
-            blocks = await asyncio.to_thread(
-                load_youtube,
-                url,
-                transcription_language,
-            )
-            transcript_text = _blocks_to_transcript_markdown(blocks)
-            if not transcript_text:
-                raise ValueError("No transcript text was produced.")
-            video_id = extract_video_id(url) or "video"
-            result = {
-                "text": transcript_text,
-                "title": f"YouTube {video_id}",
-                "video_id": video_id,
-                "language": transcription_language or "auto",
-            }
-        except Exception:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "AtlasLM could not extract or transcribe this YouTube video. "
-                    "It may be private, blocked, or the backend media transcription "
-                    f"tools may be unavailable. Caption error: {str(primary_error)}"
-                ),
-            )
-
-    transcript_text = result["text"]
-    filename = f"{result['title'][:200]} (YouTube)"
-    file_bytes = transcript_text.encode("utf-8")
-    canonical_url = f"https://www.youtube.com/watch?v={result['video_id']}"
+    payload = await _youtube_ingest_payload(url, body.language)
+    filename = payload["filename"]
+    file_bytes = payload["file_bytes"]
+    canonical_url = payload["canonical_url"]
+    transcription_language = payload["language"]
 
     pipeline = DocumentPipeline(db)
 

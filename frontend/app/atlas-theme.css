@@ -1,28 +1,29 @@
 /* frontend/app/atlas-theme.css
- * Atlas LM brand tokens - single source of truth. Import once in the root
+ * AtlasLM brand tokens - single source of truth. Import once in the root
  * layout (import "./atlas-theme.css";) so every feature shares these values.
- * Sampled from the Atlas LM website + logo. Do not hardcode brand colors in
- * components; reference these variables.
+ * Official accent is AtlasLM orange. Supporting surfaces are charcoal, cream,
+ * and neutrals. Do not reintroduce deep-blue or forest-green palettes.
  */
 :root {
-  --atlas-bg: #0D1117;
-  --atlas-surface: #121D2F;
-  --atlas-surface-2: #010409;
-  --atlas-line: #3D444D;
-  --atlas-text: #F0F6FC;
-  --atlas-muted: #9198A1;
+  --atlas-bg: #1A1714;
+  --atlas-surface: #2C2620;
+  --atlas-surface-2: #141210;
+  --atlas-line: #3F3A34;
+  --atlas-text: #F6F1E8;
+  --atlas-muted: #A8A29E;
   --atlas-accent: #FF3B00;
   --atlas-accent-2: #F08830;
   --atlas-accent-soft: rgba(255, 59, 0, 0.12);
-  --atlas-grey: #D6D6D6;
-  --atlas-ok: #56D364;
+  --atlas-cream: #F6F1E8;
+  --atlas-grey: #D6D3CD;
+  --atlas-ok: #3F8F6B;
   --atlas-warn: #F08830;
   --atlas-danger: #F2553D;
   --atlas-radius: 12px;
   --atlas-font: Inter, ui-sans-serif, system-ui, sans-serif;
 }
 .atlas-cta {
-  background: linear-gradient(135deg, var(--atlas-accent), var(--atlas-accent-2));
+  background: var(--atlas-accent);
   color: #fff; border: none; font-weight: 700; cursor: pointer;
   border-radius: 10px; padding: 10px 18px; font-family: var(--atlas-font);
 }

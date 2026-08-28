@@ -10,8 +10,23 @@ on:
 jobs:
   leak-audit:
     runs-on: ubuntu-latest
+    env:
+      # Compose interpolation requires these. They are CI-only placeholders,
+      # not production credentials, and exist so the gate can start and audit
+      # logs instead of failing before the leak check runs.
+      DB_PASSWORD: ci-compose-db-password
+      JWT_SECRET: ci-compose-jwt-secret
+      MASTRA_MODEL: atlas-internal
+      LANGDOCK_MODEL: atlas-internal
+      LANGDOCK_ENDPOINT_URL: http://127.0.0.1:9/v1
+      LANGDOCK_API_KEY: ci-unset
+      LANGDOCK_API_CODE: ci-unset
+      OPENROUTER_API_KEY: ci-unset
+      OPENAI_API_KEY: ci-unset
+      GEMINI_API_KEY: ci-unset
+      ATLAS_ACTIVE_PROVIDER: local
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run provider leak gate
         run: bash ci/run_leak_gate.sh

@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "lint:ci": "eslint app/dashboard/page.tsx app/dashboard/layout.tsx lib/ingest.ts lib/citations.ts lib/apiClient.ts lib/sources.ts",
+    "test": "node --experimental-strip-types --test lib/ingest.test.ts lib/dashboard-ingest.test.ts lib/citations.test.ts"
   },
   "dependencies": {
     "@supabase/auth-helpers-nextjs": "^0.15.0",

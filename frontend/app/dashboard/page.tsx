@@ -14,18 +14,13 @@ import {
   FileAudio,
   FileText,
   FileUp,
-  FolderOpen,
   Globe2,
-  Headphones,
   Layers3,
   Lightbulb,
   Loader2,
   MessageCircle,
-  Mic2,
-  MoreHorizontal,
   Network,
   PanelRight,
-  Play,
   Plus,
   Quote,
   Search,
@@ -42,7 +37,9 @@ import type { LucideIcon } from "lucide-react";
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiClient } from "@/lib/apiClient";
-import { type AudioOverview } from "@/lib/audio";
+import { citationChipLabel, resolveCitation, splitCitedParts } from "@/lib/citations";
+import { TRANSCRIPTION_LANGUAGES, runDashboardLinkIngest, runDashboardSourceRetry } from "@/lib/ingest";
+import UserMenu from "@/components/UserMenu";
 import "./atlas-workspace.css";
 
 type Workspace = { id: string; name: string; created_at?: string };
@@ -71,6 +68,7 @@ type Citation = {
   source_label?: string;
   venue?: string;
   file_type?: string;
+  tag?: string;
 };
 type Message = {
   id: string;
@@ -103,9 +101,15 @@ type StudioOutput = {
   created_at: string;
   citations?: Citation[];
 };
-type Panel = "workspace" | "sources" | "outputs" | "audio";
-type SourceFilter = "all" | "ready" | "processing";
+type MobilePane = "sources" | "chat" | "studio";
 type AnswerMode = "auto" | "sources" | "general";
+type StudioCapability = {
+  id: string;
+  label: string;
+  detail?: string;
+  enabled: boolean;
+  reason?: string | null;
+};
 type LayoutState = {
   source_panel_width: number;
   output_panel_width: number;
@@ -125,9 +129,17 @@ const SOURCE_TYPES = [
   { label: "Websites", detail: "Articles, docs, public pages", icon: Globe2, tone: "blue" },
   { label: "YouTube", detail: "Video transcripts with timestamps", icon: Video, tone: "red" },
   { label: "Audio files", detail: "Lectures, interviews, recordings", icon: FileAudio, tone: "violet" },
-  { label: "Google Docs", detail: "Bring in connected documents", icon: BookOpen, tone: "green" },
-  { label: "Google Slides", detail: "Use decks as source material", icon: Layers3, tone: "amber" },
+  { label: "Images", detail: "OCR for diagrams and scans", icon: FileUp, tone: "amber" },
 ] as const;
+
+const DEFAULT_STUDIO_TYPES: StudioCapability[] = [
+  { id: "report", label: "Report", detail: "Citation-backed report from ready sources", enabled: true },
+  { id: "study_guide", label: "Study Guide", enabled: false, reason: "Study tools will be enabled after the notebook-to-report review." },
+  { id: "mind_map", label: "Mind Map", enabled: false, reason: "Mind maps will be enabled after the notebook-to-report review." },
+  { id: "quiz", label: "Quiz", enabled: false, reason: "Quizzes will be enabled after the notebook-to-report review." },
+  { id: "flashcards", label: "Flashcards", enabled: false, reason: "Flashcards will be enabled after the notebook-to-report review." },
+  { id: "audio_overview", label: "Audio Overview", enabled: false, reason: "Audio overview will be enabled after the notebook-to-report review." },
+];
 
 const ACTIONS: Array<{
   id: string;
@@ -180,6 +192,13 @@ function formatDate(value?: string) {
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function jobStatusLabel(status?: string) {
+  if (status === "pending") return "Queued";
+  if (status === "processing") return "Processing";
+  if (status === "failed") return "Failed";
+  return "Ready";
+}
+
 function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60);
   const remainder = Math.floor(seconds % 60).toString().padStart(2, "0");
@@ -217,9 +236,11 @@ export default function Dashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
-  const [panel, setPanel] = useState<Panel>("workspace");
+  const [mobilePane, setMobilePane] = useState<MobilePane>("chat");
+  const [tabletStudioOpen, setTabletStudioOpen] = useState(false);
   const [answerMode, setAnswerMode] = useState<AnswerMode>("auto");
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [transcriptionLanguage, setTranscriptionLanguage] = useState("auto");
+  const [studioTypes, setStudioTypes] = useState<StudioCapability[]>(DEFAULT_STUDIO_TYPES);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState("");
@@ -235,10 +256,6 @@ export default function Dashboard() {
   const [selectedOutput, setSelectedOutput] = useState<StudioOutput | null>(null);
   const [outputs, setOutputs] = useState<StudioOutput[]>([]);
   const [generatingOutput, setGeneratingOutput] = useState<string | null>(null);
-  const [audio, setAudio] = useState<AudioOverview | null>(null);
-  const audioLoading = false;
-  const audioUrl: string | null = null;
-  const [audioPlaying, setAudioPlaying] = useState(false);
   const [sourceInput, setSourceInput] = useState("");
   const [sourceTextTitle, setSourceTextTitle] = useState("");
   const [sourceText, setSourceText] = useState("");
@@ -249,7 +266,6 @@ export default function Dashboard() {
   const [layout, setLayout] = useState<LayoutState>(DEFAULT_LAYOUT);
   const [layoutLoaded, setLayoutLoaded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
   const citationMapRef = useRef<Record<string, Citation>>({});
   const resizeRef = useRef<{ panel: "source" | "output"; startX: number; startWidth: number } | null>(null);
 
@@ -261,13 +277,10 @@ export default function Dashboard() {
   const visibleSources = useMemo(() => {
     const query = search.trim().toLowerCase();
     return sources.filter((source) => {
-      const matchesFilter = sourceFilter === "all"
-        || (sourceFilter === "ready" && source.status === "ready")
-        || (sourceFilter === "processing" && (source.status === "pending" || source.status === "processing"));
       const matchesQuery = !query || `${source.filename} ${source.file_type}`.toLowerCase().includes(query);
-      return matchesFilter && matchesQuery;
+      return matchesQuery;
     });
-  }, [search, sourceFilter, sources]);
+  }, [search, sources]);
 
   const setWorkspaceAndPersist = useCallback((next: Workspace) => {
     setWorkspace(next);
@@ -275,7 +288,6 @@ export default function Dashboard() {
     setOutputs([]);
     setMessages([]);
     setSessionId(null);
-    setAudio(null);
     setSelectedOutput(null);
     setLayout(DEFAULT_LAYOUT);
     setLayoutLoaded(false);
@@ -403,6 +415,19 @@ export default function Dashboard() {
       void apiClient.get<{ providers: Array<{ id: string; status: string }> }>("/api/v1/settings/providers")
         .then((data) => setEngine(data.providers.some((provider) => provider.id === "atlas-cloud" && provider.status === "active") ? "cloud" : "local"))
         .catch(() => setEngine("local"));
+      void apiClient.get<{ types?: StudioCapability[] }>("/api/v1/studio/types")
+        .then((data) => {
+          if (Array.isArray(data.types) && data.types.length) {
+            setStudioTypes(data.types.map((item) => ({
+              id: item.id,
+              label: item.label,
+              detail: item.detail,
+              enabled: Boolean(item.enabled),
+              reason: item.reason || (item.enabled ? null : "This Studio tool is not enabled yet."),
+            })));
+          }
+        })
+        .catch(() => undefined);
     }, 0);
     return () => {
       window.clearTimeout(workspaceTimer);
@@ -537,7 +562,14 @@ export default function Dashboard() {
       for (const file of Array.from(files)) {
         const form = new FormData();
         form.append("file", file);
-        await apiClient.postForm<Source>(`/api/v1/workspaces/${workspace.id}/documents`, form);
+        if (/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(file.name)) {
+          form.append("language", transcriptionLanguage);
+        }
+        await apiClient.postForm<Source>(
+          `/api/v1/workspaces/${workspace.id}/documents`,
+          form,
+          { "Idempotency-Key": crypto.randomUUID() },
+        );
       }
       setNotice(`${files.length} source${files.length === 1 ? "" : "s"} added. Atlas is indexing the material now.`);
       await loadSources(workspace.id);
@@ -555,21 +587,20 @@ export default function Dashboard() {
     if (!workspace || !sourceInput.trim()) return;
     setSourceBusy(true);
     setError("");
-    try {
-      const isYoutube = /(?:youtube\.com|youtu\.be)/i.test(sourceInput);
-      const path = isYoutube
-        ? `/api/v1/workspaces/${workspace.id}/documents/youtube`
-        : `/api/v1/workspaces/${workspace.id}/documents/url`;
-      await apiClient.post<Source>(path, { url: sourceInput.trim() });
-      setNotice("Source added. Atlas is preparing it for grounded answers.");
-      setSourceInput("");
-      await loadSources(workspace.id);
-      setShowSourceComposer(false);
-    } catch (caught) {
-      setError(errorMessage(caught, "Atlas could not reach that link."));
-    } finally {
-      setSourceBusy(false);
-    }
+    setNotice("");
+    const result = await runDashboardLinkIngest({
+      workspaceId: workspace.id,
+      sourceInput,
+      language: transcriptionLanguage,
+      idempotencyKey: crypto.randomUUID(),
+      post: (path, body, headers) => apiClient.post<Source>(path, body, headers),
+      loadSources,
+    });
+    setSourceInput(result.sourceInput);
+    setShowSourceComposer(result.showSourceComposer);
+    setError(result.error);
+    setNotice(result.notice);
+    setSourceBusy(false);
   };
 
   const handleText = async (event: FormEvent) => {
@@ -581,7 +612,7 @@ export default function Dashboard() {
       await apiClient.post<Source>(`/api/v1/workspaces/${workspace.id}/documents/text`, {
         title: sourceTextTitle.trim(),
         content: sourceText.trim(),
-      });
+      }, { "Idempotency-Key": crypto.randomUUID() });
       setNotice("Your notes are now part of the Atlas knowledge base.");
       setSourceTextTitle("");
       setSourceText("");
@@ -618,10 +649,46 @@ export default function Dashboard() {
     }
   };
 
+  const retrySource = async (source: Source) => {
+    if (!workspace) return;
+    setSourceBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await runDashboardSourceRetry({
+        source,
+        language: transcriptionLanguage,
+        idempotencyKey: crypto.randomUUID(),
+        post: (path, body, headers) => apiClient.post<Source>(path, body, headers),
+        loadSources: () => loadSources(workspace.id),
+      });
+      setError(result.error);
+      setNotice(result.notice);
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not retry that source. The original record is unchanged."));
+    } finally {
+      setSourceBusy(false);
+    }
+  };
+
+  const clearConversation = async () => {
+    if (!sessionId) {
+      setMessages([]);
+      return;
+    }
+    try {
+      await apiClient.del(`/api/v1/sessions/${sessionId}/messages`);
+      setMessages([]);
+      setNotice("Conversation cleared. Atlas removed the saved history for this session.");
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not clear the saved conversation."));
+    }
+  };
+
   const createOutput = async (type: StudioOutput["output_type"]) => {
     if (!workspace || !readySources.length) {
       setError("Add and finish indexing at least one source before creating a study tool.");
-      setPanel("sources");
+      setMobilePane("sources");
       return;
     }
     setGeneratingOutput(type);
@@ -632,10 +699,12 @@ export default function Dashboard() {
         title: `Atlas ${outputLabel(type)}`,
         source_ids: readySources.map((source) => source.id),
         length: "standard",
+        idempotency_key: crypto.randomUUID(),
       });
       setOutputs((current) => [output, ...current.filter((item) => item.id !== output.id)]);
       setSelectedOutput(output);
-      setPanel("outputs");
+      setTabletStudioOpen(true);
+      setMobilePane("studio");
       setNotice(output.status === "ready"
         ? `${outputLabel(type)} is ready. Open it here to use it.`
         : `${outputLabel(type)} is queued. Atlas will show the result here when it finishes.`);
@@ -646,15 +715,11 @@ export default function Dashboard() {
     }
   };
 
-  const createAudio = async () => {
-    setNotice("Audio overview will be enabled after the Report milestone.");
-    setPanel("outputs");
-  };
-
   const handleAction = (action: (typeof ACTIONS)[number]) => {
     if (action.available === false) {
       setNotice(action.unavailableReason || "This Atlas capability is not enabled yet.");
-      setPanel("outputs");
+      setMobilePane("studio");
+      setTabletStudioOpen(true);
       return;
     }
     if (action.studio) {
@@ -662,7 +727,7 @@ export default function Dashboard() {
       return;
     }
     if (action.prompt) {
-      setPanel("workspace");
+      setMobilePane("chat");
       setInput(action.prompt);
       window.setTimeout(() => void sendMessage(undefined, action.prompt), 0);
     }
@@ -683,11 +748,10 @@ export default function Dashboard() {
   const renderOutputContent = (output: StudioOutput) => {
     if (output.output_type === "report" && typeof output.content === "string") {
       const citations = output.citations || [];
-      return <div className="output-report-markdown">{output.content.split(/(\[source_\d+\])/g).map((part, index) => {
-        const match = part.match(/^\[source_(\d+)\]$/);
-        if (!match) return <span key={index}>{part}</span>;
-        const citation = citations[Number(match[1]) - 1];
-        return <button type="button" className="citation-chip" key={index} onClick={() => citation && setSelectedCitation(citation)} disabled={!citation}><Quote size={12} /> {citation?.filename || `Source ${match[1]}`}</button>;
+      return <div className="output-report-markdown">{splitCitedParts(output.content).map((part, index) => {
+        if (part.type !== "citation") return <span key={index}>{part.value}</span>;
+        const citation = resolveCitation(part.tag, citations);
+        return <button type="button" className="citation-chip" key={index} onClick={() => citation && setSelectedCitation(citation as Citation)} disabled={!citation}><Quote size={12} /> {citationChipLabel(citation, part.index)}</button>;
       })}</div>;
     }
     if (typeof output.content === "string") {
@@ -719,21 +783,19 @@ export default function Dashboard() {
   };
 
   const renderMessage = (message: Message) => {
-    const parts = message.content.split(/(\[source_\d+\])/g);
     const citations = message.citations || [];
-    return parts.map((part, index) => {
-      const match = part.match(/^\[source_(\d+)\]$/);
-      if (!match) return <span key={`${message.id}-${index}`}>{part}</span>;
-      const citation = citations[Number(match[1])] || citationMap[`source_${match[1]}`];
+    return splitCitedParts(message.content).map((part, index) => {
+      if (part.type !== "citation") return <span key={`${message.id}-${index}`}>{part.value}</span>;
+      const citation = resolveCitation(part.tag, citations, citationMap);
       return (
         <button
           key={`${message.id}-${index}`}
           type="button"
           className="citation-chip"
-          onClick={() => citation && setSelectedCitation(citation)}
+          onClick={() => citation && setSelectedCitation(citation as Citation)}
           disabled={!citation}
         >
-          <Quote size={12} /> {citation?.filename || `Source ${Number(match[1]) + 1}`}
+          <Quote size={12} /> {citationChipLabel(citation, part.index)}
         </button>
       );
     });
@@ -741,12 +803,12 @@ export default function Dashboard() {
 
   return (
     <div
-      className={`atlas-shell ${layout.source_panel_collapsed ? "source-panel-collapsed" : ""} ${layout.output_panel_collapsed ? "output-panel-collapsed" : ""}`}
+      className={`atlas-shell ${layout.source_panel_collapsed ? "source-panel-collapsed" : ""} ${layout.output_panel_collapsed ? "output-panel-collapsed" : ""} ${tabletStudioOpen ? "tablet-studio-open" : ""} mobile-pane-${mobilePane}`}
       style={{ "--atlas-source-panel-width": `${layout.source_panel_width}px`, "--atlas-output-panel-width": `${layout.output_panel_width}px` } as CSSProperties}
     >
       <aside className="atlas-sidebar">
         <div className="atlas-brand-row">
-          <Link href="/" className="atlas-brand" aria-label="Atlas home">
+          <Link href="/" className="atlas-brand" aria-label="AtlasLM home">
             <span className="atlas-brand-mark"><span /><span /><span /></span>
             <span>Atlas <em>LM</em></span>
           </Link>
@@ -756,11 +818,10 @@ export default function Dashboard() {
         </div>
 
         {!layout.source_panel_collapsed && <>
-
         <div className="workspace-switcher">
           <button type="button" className="workspace-switcher-button" onClick={() => setShowWorkspaceMenu((value) => !value)}>
             <span className="workspace-avatar">{workspace?.name.slice(0, 1).toUpperCase() || "A"}</span>
-            <span className="workspace-switcher-copy"><small>Workspace</small><strong>{workspace?.name || "Loading..."}</strong></span>
+            <span className="workspace-switcher-copy"><small>Notebook</small><strong>{workspace?.name || "Loading..."}</strong></span>
             <ChevronDown size={15} />
           </button>
           {showWorkspaceMenu && (
@@ -772,24 +833,57 @@ export default function Dashboard() {
                 </button>
               ))}
               <form className="new-workspace-form" onSubmit={createNewWorkspace}>
-                <input value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="New workspace" />
-                <button type="submit" aria-label="Create workspace"><Plus size={15} /></button>
+                <input value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="New notebook" />
+                <button type="submit" aria-label="Create notebook"><Plus size={15} /></button>
               </form>
             </div>
           )}
         </div>
 
-        <nav className="atlas-nav" aria-label="Atlas workspace">
-          <button type="button" className={`atlas-nav-item ${panel === "workspace" ? "active" : ""}`} onClick={() => setPanel("workspace")}><Sparkles size={17} /><span>Ask Atlas</span><kbd>1</kbd></button>
-          <button type="button" className={`atlas-nav-item ${panel === "sources" ? "active" : ""}`} onClick={() => setPanel("sources")}><FolderOpen size={17} /><span>Sources</span><b>{sources.length}</b></button>
-          <button type="button" className={`atlas-nav-item ${panel === "outputs" ? "active" : ""}`} onClick={() => setPanel("outputs")}><WandSparkles size={17} /><span>Outputs</span><b>{outputs.length}</b></button>
-          <button type="button" className={`atlas-nav-item unavailable ${panel === "audio" ? "active" : ""}`} disabled title="Audio overview will be enabled after the Report milestone."><Headphones size={17} /><span>Audio overview</span><b>Planned</b></button>
-        </nav>
-
-        <div className="sidebar-source-note">
-          <div className="sidebar-note-orbit"><Sparkles size={15} /></div>
-          <strong>Your sources, one mind.</strong>
-          <p>Atlas connects documents, links, lectures, and research into one citable knowledge base.</p>
+        <div className="sidebar-section-heading">
+          <span>Sources</span>
+          <button type="button" className="sidebar-add-source" onClick={() => setShowSourceComposer(true)}><Plus size={12} /> Add</button>
+        </div>
+        <label className="search-field" style={{ width: "auto", margin: "0 6px 8px", borderColor: "rgba(246,241,232,.16)", color: "#c4b8aa" }}>
+          <Search size={13} />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sources" style={{ color: "#f6f1e8" }} />
+        </label>
+        <div className="sidebar-source-list">
+          {visibleSources.length ? visibleSources.map((source) => {
+            const Icon = sourceIcon(source.file_type);
+            const busy = source.status === "pending" || source.status === "processing";
+            return (
+              <div className={`sidebar-source-item ${source.status}`} key={source.id}>
+                <span className={`source-row-icon tone-${sourceTone(source.file_type)}`}>{busy ? <Loader2 size={15} className="spin" /> : <Icon size={15} />}</span>
+                <button type="button" className="sidebar-source-copy" onClick={() => void openSourcePreview(source)} disabled={busy}>
+                  <strong>{source.filename}</strong>
+                  <small>{jobStatusLabel(source.status)} · {formatDate(source.created_at)}</small>
+                  {source.error_message && <small className="sidebar-source-error">{source.error_message}</small>}
+                </button>
+                <div className="sidebar-source-actions">
+                  {source.status === "failed" && (
+                    <button type="button" className="sidebar-retry" onClick={() => void retrySource(source)} disabled={sourceBusy}>Retry</button>
+                  )}
+                  <button type="button" className="icon-button danger-on-hover" title="Remove source" onClick={() => void deleteSource(source.id)}><Trash2 size={14} /></button>
+                </div>
+              </div>
+            );
+          }) : (
+            <div className="sidebar-empty">
+              <p>Add a PDF, website, YouTube link, audio file, or image. Atlas indexes real sources only.</p>
+              <div className="source-type-strip" style={{ marginTop: 12, gridTemplateColumns: "1fr" }}>
+                {SOURCE_TYPES.map((type) => {
+                  const Icon = type.icon;
+                  return (
+                    <div className={`source-type-card tone-${type.tone}`} key={type.label} style={{ background: "rgba(255,255,255,.04)", borderColor: "rgba(246,241,232,.12)" }}>
+                      <span className="source-type-icon"><Icon size={15} /></span>
+                      <div><strong style={{ color: "#f6f1e8" }}>{type.label}</strong><small>{type.detail}</small></div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="atlas-sidebar-footer">
@@ -803,76 +897,126 @@ export default function Dashboard() {
 
       <main className="atlas-main">
         <header className="atlas-topbar">
-          <div className="breadcrumb"><span>Atlas</span><ChevronRight size={14} /><strong>{workspace?.name || "Workspace"}</strong></div>
-          <div className="topbar-actions"><span className="privacy-pill"><Cloud size={14} /> Private workspace</span><button type="button" className="topbar-avatar" title="Account">P</button></div>
+          <div className="breadcrumb"><span>AtlasLM</span><ChevronRight size={14} /><strong>{workspace?.name || "Notebook"}</strong></div>
+          <div className="topbar-actions">
+            <button type="button" className="tablet-studio-open-button" onClick={() => setTabletStudioOpen((value) => !value)}>
+              <WandSparkles size={14} /> {tabletStudioOpen ? "Hide Studio" : "Studio"}
+            </button>
+            <span className="privacy-pill"><Cloud size={14} /> Private notebook</span>
+            <UserMenu />
+          </div>
         </header>
 
         {error && <div className="atlas-alert error"><CircleAlert size={16} /><span>{error}</span><button type="button" onClick={() => setError("")}><X size={15} /></button></div>}
         {notice && <div className="atlas-alert success"><Check size={16} /><span>{notice}</span><button type="button" onClick={() => setNotice("")}><X size={15} /></button></div>}
 
-        {panel === "workspace" && (
-          <section className="workspace-page">
-            <div className="workspace-intro">
-              <div>
-                <p className="eyebrow"><span className="eyebrow-dot" /> Source-aware intelligence</p>
-                <h1>What are you working on?</h1>
-                <p className="intro-copy">Ask Atlas anything. It can use your sources when they help, answer from its general knowledge when they do not, and show you which is which.</p>
-              </div>
-              <div className="intro-stats"><span><strong>{readySources.length}</strong> ready sources</span><span><strong>{messages.filter((message) => message.role === "assistant").length}</strong> answers</span></div>
+        <section className="workspace-page">
+          <div className="workspace-intro">
+            <div>
+              <p className="eyebrow"><span className="eyebrow-dot" /> Source-grounded chat</p>
+              <h1>Ask Atlas</h1>
+              <p className="intro-copy">Answers stay tied to indexed sources when evidence exists. Citations open the page, timestamp, or quote Atlas used.</p>
             </div>
+            <div className="intro-stats"><span><strong>{readySources.length}</strong> ready sources</span><span><strong>{messages.filter((message) => message.role === "assistant").length}</strong> answers</span></div>
+          </div>
 
-            <div className="ask-card">
-              <div className="ask-card-top"><span className="ask-orb"><Sparkles size={18} /></span><div><strong>Ask Atlas</strong><span>General knowledge plus source citations</span></div><span className="ask-card-status">{answerMode === "sources" ? "Sources only" : answerMode === "general" ? "Atlas knowledge" : "Auto"}</span></div>
-              <form className="ask-form" onSubmit={(event) => void sendMessage(event)}>
-                <div className="answer-mode-picker" aria-label="Answer mode">
-                  <span>Answer with</span>
-                  <button type="button" className={answerMode === "auto" ? "selected" : ""} onClick={() => setAnswerMode("auto")}>Auto</button>
-                  <button type="button" className={answerMode === "sources" ? "selected" : ""} onClick={() => setAnswerMode("sources")}>My sources only</button>
-                  <button type="button" className={answerMode === "general" ? "selected" : ""} onClick={() => setAnswerMode("general")}>General knowledge</button>
-                </div>
-                <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={answerMode === "sources" ? "Ask a question about your sources..." : "Ask Atlas anything..."} rows={3} disabled={loading} />
-                <div className="ask-form-footer"><span>Try: &quot;What matters most across these sources?&quot;</span><button type="submit" disabled={!input.trim() || loading}><span>{loading ? "Thinking" : "Ask Atlas"}</span>{loading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}</button></div>
-              </form>
-            </div>
-
-            {messages.length > 0 || streaming ? (
-              <div className="conversation-card">
-                <div className="section-heading"><div><p className="eyebrow">Conversation</p><h2>Working with Atlas</h2></div><button type="button" className="quiet-button" onClick={() => setMessages([])}>Clear</button></div>
-                <div className="conversation-list">
-                  {messages.map((message) => <div className={`message-row ${message.role}`} key={message.id}><span className={`message-avatar ${message.role}`}>{message.role === "assistant" ? <Sparkles size={15} /> : "P"}</span><div className="message-body"><div className="message-meta">{message.role === "assistant" ? "Atlas" : "You"}<span>{message.role === "assistant" ? (message.citations?.length ? "From your sources" : "General knowledge") : ""}</span></div><div className="message-copy">{renderMessage(message)}</div></div></div>)}
-                  {streaming && <div className="message-row assistant"><span className="message-avatar assistant"><Sparkles size={15} /></span><div className="message-body"><div className="message-meta">Atlas<span>{streamingHasSources ? "Reading your sources" : "General knowledge"}</span></div><div className="message-copy">{renderMessage({ id: "stream", role: "assistant", content: streaming })}<span className="typing-caret" /></div></div></div>}
-                </div>
+          <div className="ask-card">
+            <div className="ask-card-top"><span className="ask-orb"><Sparkles size={18} /></span><div><strong>Ask Atlas</strong><span>Source citations plus general knowledge when you choose it</span></div><span className="ask-card-status">{answerMode === "sources" ? "Sources only" : answerMode === "general" ? "Atlas knowledge" : "Auto"}</span></div>
+            <form className="ask-form" onSubmit={(event) => void sendMessage(event)}>
+              <div className="answer-mode-picker" aria-label="Answer mode">
+                <span>Answer with</span>
+                <button type="button" className={answerMode === "auto" ? "selected" : ""} onClick={() => setAnswerMode("auto")}>Auto</button>
+                <button type="button" className={answerMode === "sources" ? "selected" : ""} onClick={() => setAnswerMode("sources")}>My sources only</button>
+                <button type="button" className={answerMode === "general" ? "selected" : ""} onClick={() => setAnswerMode("general")}>General knowledge</button>
               </div>
-            ) : (
-            <div className="start-area"><div className="start-area-heading"><div><p className="eyebrow">Start with a job</p><h2>Make your sources useful</h2></div><span>Atlas can handle the rest</span></div><div className="action-grid">{ACTIONS.map((action) => { const Icon = action.icon; return <button type="button" key={action.id} className={`action-card tone-${action.tone} ${action.available === false ? "unavailable" : ""}`} onClick={() => handleAction(action)} disabled={Boolean(generatingOutput)} title={action.available === false ? action.unavailableReason : undefined}><span className="action-icon"><Icon size={17} /></span><span className="action-copy"><strong>{action.label}</strong><small>{action.detail}</small></span>{action.available === false ? <span className="planned-badge">Planned</span> : <ChevronRight size={16} className="action-arrow" />}</button>; })}</div></div>
-            )}
-          </section>
-        )}
+              <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={answerMode === "sources" ? "Ask a question about your sources..." : "Ask Atlas anything..."} rows={3} disabled={loading} />
+              <div className="ask-form-footer"><span>Try: &quot;What matters most across these sources?&quot;</span><button type="submit" disabled={!input.trim() || loading}><span>{loading ? "Thinking" : "Ask Atlas"}</span>{loading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}</button></div>
+            </form>
+          </div>
 
-        {panel === "sources" && (
-         <section className="panel-page"><div className="panel-page-heading"><div><p className="eyebrow">Knowledge base</p><h1>Your sources</h1><p>Add the material Atlas should understand. PDFs, websites, videos, audio, Google files, and course notes all work together here.</p></div><button type="button" className="primary-button" onClick={() => setShowSourceComposer(true)}><Plus size={17} /> Add sources</button></div><div className="source-type-strip">{SOURCE_TYPES.map((type) => { const Icon = type.icon; return <div className={`source-type-card tone-${type.tone}`} key={type.label}><span className="source-type-icon"><Icon size={17} /></span><div><strong>{type.label}</strong><small>{type.detail}</small></div></div>; })}</div><div className="source-library"><div className="library-toolbar"><div className="library-tabs"><button type="button" className={sourceFilter === "all" ? "selected" : ""} onClick={() => setSourceFilter("all")}>All <b>{sources.length}</b></button><button type="button" className={sourceFilter === "ready" ? "selected" : ""} onClick={() => setSourceFilter("ready")}>Ready <b>{readySources.length}</b></button><button type="button" className={sourceFilter === "processing" ? "selected" : ""} onClick={() => setSourceFilter("processing")}>Indexing <b>{processingSources.length}</b></button></div><label className="search-field"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sources" /></label></div>{visibleSources.length ? <div className="source-table">{visibleSources.map((source) => { const Icon = sourceIcon(source.file_type); const busy = source.status === "pending" || source.status === "processing"; return <div className="source-row" key={source.id}><span className={`source-row-icon tone-${sourceTone(source.file_type)}`}>{busy ? <Loader2 size={17} className="spin" /> : <Icon size={17} />}</span><div className="source-row-main"><strong>{source.filename}</strong><span>{source.file_type.toUpperCase()} <i /> {busy ? "Indexing" : source.status === "failed" ? "Needs attention" : "Ready for Atlas"} <i /> {formatDate(source.created_at)}</span>{source.error_message && <small className="source-error">{source.error_message}</small>}</div><button type="button" className="source-preview-button" onClick={() => void openSourcePreview(source)} disabled={busy}>{busy ? "Indexing" : "View indexed text"}</button><div className={`source-status ${source.status}`}>{busy ? "Preparing" : source.status === "failed" ? "Failed" : "Ready"}</div><button type="button" className="icon-button danger-on-hover" title="Remove source" onClick={() => void deleteSource(source.id)}><Trash2 size={16} /></button></div>; })}</div> : <div className="empty-library"><FolderOpen size={28} /><h3>No sources match this view</h3><p>Add your first PDF, website, lecture, or research paper and Atlas will turn it into a searchable knowledge base.</p><button type="button" className="secondary-button" onClick={() => setShowSourceComposer(true)}><UploadCloud size={16} /> Add a source</button></div>}</div></section>
-        )}
-
-        {panel === "outputs" && (
-         <section className="panel-page"><div className="panel-page-heading"><div><p className="eyebrow">Generated with your sources</p><h1>Outputs</h1><p>Study tools, structured thinking, and useful deliverables made from the material in this workspace.</p></div><button type="button" className="primary-button" onClick={() => setPanel("workspace")}><Sparkles size={17} /> Ask Atlas</button></div><div className="output-layout"><div className="output-list"><div className="output-list-heading"><span>Created outputs</span><span>{outputs.length}</span></div>{outputs.length ? outputs.map((output) => <button type="button" key={output.id} className={`output-item ${selectedOutput?.id === output.id ? "selected" : ""}`} onClick={() => setSelectedOutput(output)}><span className="output-item-icon tone-violet"><WandSparkles size={16} /></span><span><strong>{output.title}</strong><small>{outputLabel(output.output_type)} <i /> {output.status === "ready" ? "Ready" : output.status === "failed" ? "Failed" : "Building"}</small></span>{output.status === "pending" || output.status === "processing" ? <Loader2 size={15} className="spin" /> : output.status === "failed" ? <CircleAlert size={15} /> : <ChevronRight size={16} />}</button>) : <div className="output-empty"><WandSparkles size={22} /><strong>Nothing generated yet</strong><span>Choose a study tool below to create your first output.</span></div>}<div className="output-create-list">{ACTIONS.filter((action) => action.studio).map((action) => { const Icon = action.icon; const type = action.studio as StudioOutput["output_type"]; return <button type="button" key={action.id} className="output-create-button" onClick={() => void createOutput(type)} disabled={generatingOutput === type}><Icon size={16} /><span>{action.label}</span>{generatingOutput === type ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}</button>; })}</div></div><div className="output-viewer">{selectedOutput ? <><div className="output-viewer-heading"><div><p className="eyebrow">{outputLabel(selectedOutput.output_type)}</p><h2>{selectedOutput.title}</h2></div><button type="button" className="icon-button" onClick={() => setSelectedOutput(null)}><X size={16} /></button></div><div className="output-content">{selectedOutput.status === "failed" ? <div className="output-building"><CircleAlert size={22} /><h3>This output could not be completed</h3><p>{selectedOutput.error || "Atlas could not finish this output. Try again."}</p></div> : selectedOutput.status !== "ready" ? <div className="output-building"><div className="building-orbit"><Sparkles size={22} /></div><h3>Atlas is building this for you</h3><p>It is reading your indexed sources and assembling a citation-backed {outputLabel(selectedOutput.output_type).toLowerCase()}.</p></div> : selectedOutput.content ? renderOutputContent(selectedOutput) : <div className="output-building"><Check size={22} /><h3>Your output is ready</h3><p>Atlas returned an empty result. Try generating it again.</p></div>}</div></> : <div className="viewer-placeholder"><div className="viewer-placeholder-icon"><FileText size={24} /></div><h2>Select an output</h2><p>Your generated study tools and structured notes will appear here.</p></div>}</div></div></section>
-        )}
-
-        {panel === "audio" && (
-         <section className="panel-page audio-page"><div className="panel-page-heading"><div><p className="eyebrow">Listen to your knowledge base</p><h1>Audio overview</h1><p>Atlas reads your ready sources, writes a short two-host discussion, and returns both an audio track and a transcript you can follow.</p></div><button type="button" className="primary-button" onClick={() => void createAudio()} disabled={audioLoading || !readySources.length}><Headphones size={17} /> {audioLoading ? "Generating..." : "Generate overview"}</button></div><div className="audio-explainer"><div><strong>What this does</strong><p>Useful when you want to review lecture notes, research papers, or a meeting brief while walking. It is not another chat response. It is a narrated summary made from the ready sources shown below.</p></div><span>{readySources.length} ready source{readySources.length === 1 ? "" : "s"} in scope</span></div>{audio ? <div className="audio-layout"><div className="audio-player-card"><div className="audio-art"><div className="audio-art-grid" /><Headphones size={34} /></div><div className="audio-player-copy"><span className="eyebrow">Deep dive</span><h2>{audio.title}</h2><p>{formatDuration(audio.duration)} of narrated source review</p><div className="audio-controls"><button type="button" className="audio-play" disabled={!audioUrl} onClick={() => { const element = audioRef.current; if (!element) return; if (element.paused) { void element.play(); setAudioPlaying(true); } else { element.pause(); setAudioPlaying(false); } }}>{audioPlaying ? "Pause" : <><Play size={16} fill="currentColor" /> {audioUrl ? "Play overview" : "Audio unavailable"}</>}</button><span>{audio.transcript.length} transcript moments</span></div><audio ref={audioRef} src={audioUrl || undefined} onEnded={() => setAudioPlaying(false)} /></div></div><div className="transcript-card"><div className="section-heading"><div><p className="eyebrow">Transcript</p><h2>Follow along</h2></div><span>{audio.style === "deep_dive" ? "Two hosts" : "Brief"}</span></div>{audio.transcript.map((line, index) => <div className="transcript-line" key={`${line.start}-${index}`}><span>{line.name}</span><p>{line.text}{line.cite ? <sup>[{line.cite}]</sup> : null}</p></div>)}</div></div> : <div className="audio-empty"><div className="audio-empty-art"><Mic2 size={30} /></div><h2>Give your sources a voice</h2><p>Generate a narrated summary for research reviews, course materials, meeting prep, or a quick walk through the ideas you have collected.</p><button type="button" className="secondary-button" onClick={() => void createAudio()} disabled={audioLoading || !readySources.length}>{audioLoading ? "Preparing your overview" : readySources.length ? "Create audio overview" : "Add sources first"}</button></div>}</section>
-        )}
+          {messages.length > 0 || streaming ? (
+            <div className="conversation-card">
+              <div className="section-heading"><div><p className="eyebrow">Conversation</p><h2>Working with Atlas</h2></div><button type="button" className="quiet-button" onClick={() => void clearConversation()}>Clear conversation</button></div>
+              <div className="conversation-list">
+                {messages.map((message) => <div className={`message-row ${message.role}`} key={message.id}><span className={`message-avatar ${message.role}`}>{message.role === "assistant" ? <Sparkles size={15} /> : "You"}</span><div className="message-body"><div className="message-meta">{message.role === "assistant" ? "Atlas" : "You"}<span>{message.role === "assistant" ? (message.citations?.length ? "From your sources" : "General knowledge") : ""}</span></div><div className="message-copy">{renderMessage(message)}</div></div></div>)}
+                {streaming && <div className="message-row assistant"><span className="message-avatar assistant"><Sparkles size={15} /></span><div className="message-body"><div className="message-meta">Atlas<span>{streamingHasSources ? "Reading your sources" : "General knowledge"}</span></div><div className="message-copy">{renderMessage({ id: "stream", role: "assistant", content: streaming })}<span className="typing-caret" /></div></div></div>}
+              </div>
+            </div>
+          ) : (
+            <div className="start-area">
+              <div className="start-area-heading"><div><p className="eyebrow">Start with a job</p><h2>Make your sources useful</h2></div><span>Enabled tools run against ready sources</span></div>
+              <div className="action-grid">{ACTIONS.map((action) => { const Icon = action.icon; return <button type="button" key={action.id} className={`action-card tone-${action.tone} ${action.available === false ? "unavailable" : ""}`} onClick={() => handleAction(action)} disabled={Boolean(generatingOutput)} title={action.available === false ? action.unavailableReason : undefined}><span className="action-icon"><Icon size={17} /></span><span className="action-copy"><strong>{action.label}</strong><small>{action.detail}</small></span>{action.available === false ? <span className="planned-badge">Planned</span> : <ChevronRight size={16} className="action-arrow" />}</button>; })}</div>
+            </div>
+          )}
+        </section>
       </main>
 
-      <button type="button" className="right-rail-toggle" onClick={() => setLayout((current) => ({ ...current, output_panel_collapsed: !current.output_panel_collapsed }))} aria-label={layout.output_panel_collapsed ? "Restore output panel" : "Collapse output panel"}>
+      <button type="button" className="right-rail-toggle" onClick={() => setLayout((current) => ({ ...current, output_panel_collapsed: !current.output_panel_collapsed }))} aria-label={layout.output_panel_collapsed ? "Restore Studio panel" : "Collapse Studio panel"}>
         {layout.output_panel_collapsed ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}
       </button>
 
-      <aside className="atlas-right-rail"><div className="right-rail-heading"><div><p className="eyebrow">Workspace pulse</p><h2>At a glance</h2></div><MoreHorizontal size={18} /></div><div className="pulse-card"><div className="pulse-ring"><span>{readySources.length}</span></div><div><strong>Ready to think with</strong><p>{readySources.length ? "Your sources are available to Atlas." : "Add a source to wake up this workspace."}</p></div></div><div className="rail-section"><div className="rail-section-heading"><span>Source types</span><button type="button" onClick={() => setPanel("sources")}>View all</button></div><div className="rail-type-list">{SOURCE_TYPES.slice(0, 4).map((type) => { const Icon = type.icon; const count = sources.filter((source) => source.file_type.toLowerCase().includes(type.label.toLowerCase().replace(/s$/, "").split(" ")[0])).length; return <button type="button" key={type.label} onClick={() => setPanel("sources")}><span className={`rail-type-icon tone-${type.tone}`}><Icon size={15} /></span><span>{type.label}</span><b>{count}</b></button>; })}</div></div><div className="rail-section"><div className="rail-section-heading"><span>Quick actions</span><span className="rail-count">{ACTIONS.length}</span></div><div className="rail-action-list"><button type="button" onClick={() => void createAudio()}><Headphones size={15} /><span>Listen to an overview</span><ChevronRight size={14} /></button><button type="button" onClick={() => handleAction(ACTIONS.find((action) => action.id === "compare")!)}><Network size={15} /><span>Compare approaches</span><ChevronRight size={14} /></button><button type="button" onClick={() => handleAction(ACTIONS.find((action) => action.id === "insights")!)}><Lightbulb size={15} /><span>Find hidden insights</span><ChevronRight size={14} /></button></div></div><div className="rail-callout"><div className="rail-callout-icon"><UploadCloud size={16} /></div><strong>Bring in more context</strong><p>Google Docs, Slides, lecture recordings, and textbook chapters can all live in this workspace.</p><button type="button" onClick={() => setShowSourceComposer(true)}>Add another source <ArrowUpRight size={13} /></button></div></aside>
+      <aside className="atlas-right-rail">
+        <div className="right-rail-heading">
+          <div><p className="eyebrow">Studio</p><h2>Artifacts</h2></div>
+          <span className="rail-count">{outputs.length}</span>
+        </div>
+        <div className="output-create-list">
+          {studioTypes.map((capability) => {
+            const isReport = capability.id === "report";
+            return (
+              <button
+                type="button"
+                key={capability.id}
+                className="output-create-button"
+                disabled={!capability.enabled || Boolean(generatingOutput)}
+                title={capability.enabled ? capability.detail : capability.reason || undefined}
+                onClick={() => {
+                  if (!capability.enabled) {
+                    setNotice(capability.reason || "This Studio tool is not enabled yet.");
+                    return;
+                  }
+                  if (isReport) void createOutput("report");
+                }}
+              >
+                <WandSparkles size={16} />
+                <span>{capability.label}</span>
+                {capability.enabled ? (generatingOutput === "report" && isReport ? <Loader2 size={14} className="spin" /> : <Plus size={14} />) : <span className="planned-badge">Planned</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div className="rail-section">
+          <div className="rail-section-heading"><span>Job states</span><button type="button" onClick={() => workspace && void loadOutputs(workspace.id)}>Refresh</button></div>
+          <div className="studio-job-list">
+            {outputs.length ? outputs.map((output) => (
+              <div key={output.id}>
+                <button type="button" className={`studio-job ${selectedOutput?.id === output.id ? "selected" : ""}`} onClick={() => setSelectedOutput(output)}>
+                  <strong>{output.title}</strong>
+                  <small>{outputLabel(output.output_type)} · {jobStatusLabel(output.status)}</small>
+                  {output.error && <span className="studio-job-error">{output.error}</span>}
+                </button>
+                {output.status === "failed" && output.output_type === "report" && (
+                  <button type="button" className="studio-retry" onClick={() => void createOutput("report")}>Retry report</button>
+                )}
+              </div>
+            )) : <div className="output-empty"><strong>No Studio jobs yet</strong><span>Generate a report from ready sources. Other Studio tools stay planned until the backend enables them.</span></div>}
+          </div>
+        </div>
+      </aside>
 
-      {showSourceComposer && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSourceComposer(false); }}><div className="source-composer" role="dialog" aria-modal="true" aria-labelledby="source-composer-title"><div className="composer-heading"><div><p className="eyebrow">Expand the knowledge base</p><h2 id="source-composer-title">Add sources to Atlas</h2><p>Everything you add becomes available to Ask Atlas and the tools below.</p></div><button type="button" className="icon-button" onClick={() => setShowSourceComposer(false)}><X size={17} /></button></div><div className="composer-tabs"><button type="button" className={sourceMode === "files" ? "selected" : ""} onClick={() => setSourceMode("files")}><FileUp size={16} /> Upload files</button><button type="button" className={sourceMode === "link" ? "selected" : ""} onClick={() => setSourceMode("link")}><Globe2 size={16} /> Paste a link</button><button type="button" className={sourceMode === "text" ? "selected" : ""} onClick={() => setSourceMode("text")}><FileText size={16} /> Paste text</button></div>{sourceMode === "files" && <div className="composer-body"><button type="button" className="dropzone" onClick={() => fileInputRef.current?.click()} disabled={sourceBusy}><span className="dropzone-icon"><UploadCloud size={22} /></span><strong>{sourceBusy ? "Adding sources..." : "Choose files from your device"}</strong><span>PDF, DOCX, PPTX, XLSX, TXT, audio, and image files</span></button><input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.mp3,.wav,.m4a,.aac,.ogg,.flac,.png,.jpg,.jpeg,.webp" className="visually-hidden" onChange={(event) => void handleFiles(event.target.files)} /><div className="composer-divider"><span>or connect a library</span></div><Link href="/settings/connections" className="google-connect"><span className="google-connect-mark">G</span><span><strong>Connect Google Drive</strong><small>Bring in Google Docs and Slides</small></span><ArrowUpRight size={16} /></Link><p className="composer-footnote">You can also add lecture recordings, textbook chapters, research papers, and course materials as files.</p></div>}{sourceMode === "link" && <form className="composer-body" onSubmit={(event) => void handleUrl(event)}><label className="field-label">Website or YouTube URL<input value={sourceInput} onChange={(event) => setSourceInput(event.target.value)} placeholder="https://..." autoFocus /></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceInput.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding link</> : <><Plus size={16} /> Add link</>}</button><p className="composer-footnote">Atlas extracts readable web text and YouTube transcripts so answers can point back to the original source.</p></form>}{sourceMode === "text" && <form className="composer-body" onSubmit={(event) => void handleText(event)}><label className="field-label">Title<input value={sourceTextTitle} onChange={(event) => setSourceTextTitle(event.target.value)} placeholder="Lecture notes, research idea, meeting notes..." autoFocus /></label><label className="field-label">Text<textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} rows={7} placeholder="Paste the material Atlas should understand..." /></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceText.trim() || !sourceTextTitle.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding text</> : <><Plus size={16} /> Add text</>}</button></form>}</div></div>}
+      <nav className="atlas-mobile-tabs" aria-label="Dashboard sections">
+        <button type="button" className={mobilePane === "sources" ? "active" : ""} onClick={() => setMobilePane("sources")}>Sources</button>
+        <button type="button" className={mobilePane === "chat" ? "active" : ""} onClick={() => setMobilePane("chat")}>Ask Atlas</button>
+        <button type="button" className={mobilePane === "studio" ? "active" : ""} onClick={() => setMobilePane("studio")}>Studio</button>
+      </nav>
 
-      {selectedSource && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setSelectedSource(null); setSourcePreview(null); } }}><div className="source-preview-modal" role="dialog" aria-modal="true" aria-labelledby="source-preview-title"><div className="composer-heading"><div><p className="eyebrow">Indexed source</p><h2 id="source-preview-title">{selectedSource.filename}</h2><p>{selectedSource.file_type.toUpperCase()} source text that Atlas can search and cite.</p></div><button type="button" className="icon-button" onClick={() => { setSelectedSource(null); setSourcePreview(null); }}><X size={17} /></button></div>{selectedSource.source_url && <a className="source-preview-link" href={selectedSource.source_url} target="_blank" rel="noreferrer"><SquareArrowOutUpRight size={14} /> Open original source</a>}{previewLoading ? <div className="preview-loading"><Loader2 size={22} className="spin" /><p>Loading the text Atlas indexed...</p></div> : sourcePreview?.chunks.length ? <div className="preview-chunks">{sourcePreview.chunks.map((chunk) => <article className="preview-chunk" key={chunk.id}><span>{chunk.timestamp != null ? `Timestamp ${formatDuration(chunk.timestamp)}` : chunk.page_number ? `Page ${chunk.page_number}` : "Indexed excerpt"}</span><p>{chunk.content}</p></article>)}</div> : <div className="preview-loading"><FileText size={22} /><p>No indexed text is available yet. Check the source status and try again.</p></div>}</div></div>}
+      {showSourceComposer && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSourceComposer(false); }}><div className="source-composer" role="dialog" aria-modal="true" aria-labelledby="source-composer-title"><div className="composer-heading"><div><p className="eyebrow">Expand the knowledge base</p><h2 id="source-composer-title">Add sources to Atlas</h2><p>Files, websites, and YouTube links are ingested through the live backend. Social video URLs that are not YouTube are not supported yet.</p></div><button type="button" className="icon-button" onClick={() => setShowSourceComposer(false)}><X size={17} /></button></div><div className="composer-tabs"><button type="button" className={sourceMode === "files" ? "selected" : ""} onClick={() => setSourceMode("files")}><FileUp size={16} /> Upload files</button><button type="button" className={sourceMode === "link" ? "selected" : ""} onClick={() => setSourceMode("link")}><Globe2 size={16} /> Paste a link</button><button type="button" className={sourceMode === "text" ? "selected" : ""} onClick={() => setSourceMode("text")}><FileText size={16} /> Paste text</button></div>{sourceMode === "files" && <div className="composer-body"><label className="field-label">Transcription language for audio files<select value={transcriptionLanguage} onChange={(event) => setTranscriptionLanguage(event.target.value)} disabled={sourceBusy}>{TRANSCRIPTION_LANGUAGES.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</select></label><button type="button" className="dropzone" onClick={() => fileInputRef.current?.click()} disabled={sourceBusy}><span className="dropzone-icon"><UploadCloud size={22} /></span><strong>{sourceBusy ? "Adding sources..." : "Choose files from your device"}</strong><span>PDF, DOCX, PPTX, XLSX, TXT, audio, and image files</span></button><input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.mp3,.wav,.m4a,.aac,.ogg,.flac,.png,.jpg,.jpeg,.webp" className="visually-hidden" onChange={(event) => void handleFiles(event.target.files)} /><div className="composer-divider"><span>or connect a library</span></div><Link href="/settings/connections" className="google-connect"><span className="google-connect-mark">G</span><span><strong>Connect Google Drive</strong><small>Opens the real connections settings page</small></span><ArrowUpRight size={16} /></Link></div>}{sourceMode === "link" && <form className="composer-body" onSubmit={(event) => void handleUrl(event)}><label className="field-label">Website or YouTube URL<input value={sourceInput} onChange={(event) => setSourceInput(event.target.value)} placeholder="example.com/article or youtube.com/watch?v=..." autoFocus /></label><label className="field-label">Transcription language for YouTube<select value={transcriptionLanguage} onChange={(event) => setTranscriptionLanguage(event.target.value)} disabled={sourceBusy}>{TRANSCRIPTION_LANGUAGES.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</select></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceInput.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding link</> : <><Plus size={16} /> Add link</>}</button><p className="composer-footnote">Websites go to /documents/url. YouTube links go to /documents/youtube with the selected language. AtlasLM does not invent progress or sample sources.</p></form>}{sourceMode === "text" && <form className="composer-body" onSubmit={(event) => void handleText(event)}><label className="field-label">Title<input value={sourceTextTitle} onChange={(event) => setSourceTextTitle(event.target.value)} placeholder="Lecture notes, research idea, meeting notes..." autoFocus /></label><label className="field-label">Text<textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} rows={7} placeholder="Paste the material Atlas should understand..." /></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceText.trim() || !sourceTextTitle.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding text</> : <><Plus size={16} /> Add text</>}</button></form>}</div></div>}
 
-      {selectedCitation && <div className="citation-drawer"><div className="citation-drawer-heading"><div><p className="eyebrow">Source reference</p><h3>{selectedCitation.filename || "Atlas source"}</h3></div><button type="button" className="icon-button" onClick={() => setSelectedCitation(null)}><X size={16} /></button></div><div className="citation-meta">{selectedCitation.page_number ? `Page ${selectedCitation.page_number}` : selectedCitation.source_label || "Verified source excerpt"}{selectedCitation.external_url && <a href={selectedCitation.external_url} target="_blank" rel="noreferrer">Open source <SquareArrowOutUpRight size={13} /></a>}</div><blockquote>{selectedCitation.content || selectedCitation.text || "No excerpt was returned for this citation."}</blockquote></div>}
+      {selectedSource && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setSelectedSource(null); setSourcePreview(null); } }}><div className="source-preview-modal" role="dialog" aria-modal="true" aria-labelledby="source-preview-title"><div className="composer-heading"><div><p className="eyebrow">Indexed source</p><h2 id="source-preview-title">{selectedSource.filename}</h2><p>{selectedSource.file_type.toUpperCase()} source text that Atlas can search and cite.</p></div><button type="button" className="icon-button" onClick={() => { setSelectedSource(null); setSourcePreview(null); }}><X size={17} /></button></div>{selectedSource.source_url && <a className="source-preview-link" href={selectedSource.source_url} target="_blank" rel="noreferrer"><SquareArrowOutUpRight size={14} /> Open original source</a>}{previewLoading ? <div className="preview-loading"><Loader2 size={22} className="spin" /><p>Loading the text Atlas indexed...</p></div> : sourcePreview?.chunks.length ? <div className="preview-chunks">{sourcePreview.chunks.map((chunk) => <article className="preview-chunk" key={chunk.id}><span>{chunk.timestamp != null ? `Timestamp ${formatDuration(chunk.timestamp)}` : chunk.page_number ? `Page ${chunk.page_number}` : chunk.sheet ? `Sheet ${chunk.sheet}` : "Indexed excerpt"}</span><p>{chunk.content}</p></article>)}</div> : <div className="preview-loading"><FileText size={22} /><p>No indexed text is available yet. Check the source status and try again.</p></div>}</div></div>}
+
+      {selectedOutput && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedOutput(null); }}><div className="studio-output-modal" role="dialog" aria-modal="true"><div className="output-viewer-heading"><div><p className="eyebrow">{outputLabel(selectedOutput.output_type)}</p><h2>{selectedOutput.title}</h2></div><button type="button" className="icon-button" onClick={() => setSelectedOutput(null)}><X size={16} /></button></div><div className="output-content">{selectedOutput.status === "failed" ? <div className="output-building"><CircleAlert size={22} /><h3>This output could not be completed</h3><p>{selectedOutput.error || "Atlas could not finish this output. Try again."}</p>{selectedOutput.output_type === "report" && <button type="button" className="primary-button" onClick={() => void createOutput("report")}>Retry report</button>}</div> : selectedOutput.status !== "ready" ? <div className="output-building"><div className="building-orbit"><Sparkles size={22} /></div><h3>Atlas is building this for you</h3><p>Queued and processing jobs stay on the server. Refresh keeps the same artifact.</p></div> : selectedOutput.content ? renderOutputContent(selectedOutput) : <div className="output-building"><Check size={22} /><h3>Your output is ready</h3><p>Atlas returned an empty result. Try generating it again.</p></div>}</div></div></div>}
+
+      {selectedCitation && <div className="citation-drawer"><div className="citation-drawer-heading"><div><p className="eyebrow">Source reference</p><h3>{selectedCitation.filename || "Atlas source"}</h3></div><button type="button" className="icon-button" onClick={() => setSelectedCitation(null)}><X size={16} /></button></div><div className="citation-meta">{selectedCitation.timestamp != null ? `Timestamp ${formatDuration(selectedCitation.timestamp)}` : selectedCitation.page_number ? `Page ${selectedCitation.page_number}` : selectedCitation.source_label || "Verified source excerpt"}{(selectedCitation.external_url || selectedCitation.source_url) && <a href={selectedCitation.external_url || selectedCitation.source_url} target="_blank" rel="noreferrer">Open source <SquareArrowOutUpRight size={13} /></a>}</div><blockquote>{selectedCitation.content || selectedCitation.text || selectedCitation.quote || "No excerpt was returned for this citation."}</blockquote></div>}
     </div>
   );
 }

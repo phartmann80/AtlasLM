@@ -12,7 +12,7 @@ import "./team.css";
 
 const ROLE_LABEL: Record<Role, string> = { owner: "Owner", editor: "Editor", viewer: "Viewer" };
 const ROLE_COLOR: Record<Role, string> = {
-  owner: "var(--atlas-accent-2)", editor: "#7AA7FF", viewer: "var(--atlas-muted)",
+  owner: "var(--atlas-accent-2)", editor: "var(--atlas-muted)", viewer: "var(--atlas-muted)",
 };
 const ROLE_DESC: Record<Role, string> = {
   owner: "Billing, delete workspace, full control",
@@ -21,7 +21,7 @@ const ROLE_DESC: Record<Role, string> = {
 };
 
 function colorFor(seed: string): string {
-  const palette = ["#FF3B00", "#7AA7FF", "#56D364", "#C792EA", "#F08830"];
+  const palette = ["#FF3B00", "#A8A29E", "#3F8F6B", "#F08830", "#78716C"];
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
   return palette[Math.abs(h) % palette.length];

@@ -16,7 +16,6 @@ const BLOCKED_TARGETS = [
 function configuredBackend(): string | null {
   const raw =
     process.env.ATLAS_BACKEND_URL ||
-    process.env.ATLAS_VERCEL_BACKEND_URL ||
     process.env.ATLAS_API_PROXY_TARGET ||
     "";
   const target = raw.trim().replace(/\/$/, "");
@@ -46,7 +45,7 @@ function proxyHeaders(request: Request): Headers {
     "transfer-encoding",
     "upgrade",
   ].forEach((name) => headers.delete(name));
-  headers.set("x-atlaslm-gateway", "vercel");
+  headers.set("x-atlaslm-gateway", "owned-proxy");
   return headers;
 }
 

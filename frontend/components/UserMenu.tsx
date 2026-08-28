@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { supabaseBrowser, getCurrentProfile, signOut } from "@/lib/supabaseClient";
+import { supabaseBrowser, getCurrentProfile, signOut, type AtlasProfile } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 
 export default function UserMenu() {
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<AtlasProfile | { email?: string } | null>(null);
   const [tier, setTier] = useState<string>("Free");
   const [open, setOpen] = useState(false);
 
@@ -35,6 +35,7 @@ export default function UserMenu() {
     if (typeof window !== 'undefined') {
       localStorage.removeItem("selectedWorkspaceId");
       localStorage.removeItem("selectedSessionId");
+      localStorage.removeItem("atlas:selected-workspace");
     }
     
     router.push("/login");

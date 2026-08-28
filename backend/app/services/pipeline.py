@@ -375,6 +375,10 @@ class DocumentPipeline:
 
         document.embedding_model = provider_registry.get_embeddings(None).model_id
 
+        # Replace prior chunks only after parse and embed succeed so a failed
+        # retry cannot commit a delete of the original indexed text.
+        self.db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete()
+
         for idx, chunk_info in enumerate(chunks_data):
             self.db.add(
                 DocumentChunk(

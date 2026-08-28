@@ -100,7 +100,7 @@ def _resolve_tier(status: str, metadata: dict) -> str:
 
 @router.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
-    # 1. Read the RAW body. Do NOT use request.json() first — signature
+    # 1. Read the RAW body. Do NOT use request.json() first. Signature
     #    verification must run against the exact bytes Stripe signed.
     payload = await request.body()
     sig_header = request.headers.get("Stripe-Signature", "")
