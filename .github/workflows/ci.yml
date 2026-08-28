@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://ci.invalid
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: TypeScript
+        run: npx tsc --noEmit
+      - name: ESLint
+        run: npm run lint:ci
+      - name: Unit tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      JWT_SECRET: ci-jwt-secret
+      DATABASE_URL: postgresql://atlaslm@localhost:5435/atlaslm_db
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: pip install -r backend/requirements-ci.txt
+      - name: Compile
+        working-directory: backend
+        run: python -m compileall -q app
+      - name: Unit tests
+        working-directory: backend
+        run: PYTHONPATH=. python -m unittest discover -s tests -v
+
+  mastra:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mastra
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mastra/package-lock.json
+      - run: npm ci
+      - name: TypeScript build
+        run: npm run build
+
+  punctuation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Punctuation lint
+        run: bash scripts/lint_no_ai_punctuation.sh

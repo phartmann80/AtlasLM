@@ -27,6 +27,7 @@ from ..services.youtube_extract import (
 from ..services.ingest.youtube_loader import load_youtube
 from ..services.transcription_language import normalize_transcription_language
 from ..services.pipeline import DocumentPipeline
+from ..services.safe_fetch import PublicFetchError, download_public_html, normalize_public_http_url
 from ..services.rag import RAGService
 from ..core.providers import provider_registry, ProviderError
 from ..services.jobs import enqueue_ingestion_job, enqueue_studio_job, redis_healthy
@@ -141,40 +142,17 @@ def _existing_idempotent_document(
 
 
 def _normalize_public_url(raw_url: str) -> str:
-    url = raw_url.strip()
-    if not url:
-        raise HTTPException(status_code=400, detail="URL is required")
-    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
-        url = f"https://{url}"
-    if not url.lower().startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
-    return url
-
-
-MAX_HTML_SIZE = 10 * 1024 * 1024
+    try:
+        return normalize_public_http_url(raw_url)
+    except PublicFetchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 async def _download_public_html(url: str) -> bytes:
-    import httpx
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(
-                url,
-                timeout=15.0,
-                follow_redirects=True,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; AtlasLM/1.0; +https://atlaslm.app)",
-                    "Accept": "text/html,application/xhtml+xml",
-                },
-            )
-            res.raise_for_status()
-            content_type = res.headers.get("content-type", "")
-            if "text/html" not in content_type and "xml" not in content_type and content_type:
-                raise HTTPException(
-                    status_code=422,
-                    detail="The URL did not return a web page. Only HTML pages are supported for now.",
-                )
-            return res.text.encode("utf-8")[:MAX_HTML_SIZE]
+        return await download_public_html(url)
+    except PublicFetchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception:
@@ -714,9 +692,16 @@ async def retry_document(
         db.commit()
         db.refresh(doc)
         return doc
-    except Exception as exc:
+    except Exception:
+        db.rollback()
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Document not found")
         doc.status = "failed"
-        doc.error_message = previous_error or str(exc)
+        doc.error_message = (
+            previous_error
+            or "Atlas could not retry that source. The original record is unchanged."
+        )
         db.commit()
         db.refresh(doc)
         raise HTTPException(

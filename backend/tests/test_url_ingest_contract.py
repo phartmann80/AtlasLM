@@ -225,6 +225,36 @@ class UrlYoutubeIngestRouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
 
+    def test_private_literal_urls_are_rejected_without_fetching(self) -> None:
+        urls = [
+            "http://127.0.0.1/",
+            "http://localhost/",
+            "http://[::1]/",
+            "http://10.0.0.8/internal",
+            "http://172.16.1.4/",
+            "http://192.168.1.20/",
+            "http://169.254.169.254/latest/meta-data/",
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                with patch(
+                    "app.api.endpoints._get_owned_workspace",
+                    return_value=FakeWorkspace(),
+                ), patch(
+                    "app.api.endpoints._existing_idempotent_document",
+                    return_value=None,
+                ), patch(
+                    "app.api.endpoints._download_public_html",
+                    new_callable=AsyncMock,
+                ) as download:
+                    response = self.client.post(
+                        f"/api/v1/workspaces/{WORKSPACE_ID}/documents/url",
+                        json={"url": url},
+                        headers=self._headers(),
+                    )
+                self.assertEqual(response.status_code, 400, url)
+                download.assert_not_called()
+
 
 class DocumentRetryRouteTests(unittest.TestCase):
     def setUp(self) -> None:
