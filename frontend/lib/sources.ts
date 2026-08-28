@@ -13,33 +13,27 @@ export const SOURCE_TYPES = [
   { id: "web",   label: "Website",     accept: "url",             color: "#0EA5E9", status: "live", pipeline: "Readable text crawl" },
 ] as const;
 
-const API = process.env.NEXT_PUBLIC_API_BASE ?? "";
+import { apiClient } from "@/lib/apiClient";
+import { buildLinkIngestRequest } from "@/lib/ingest";
 
 export async function uploadSource(
-  notebookId: string, file: File, token: string,
+  notebookId: string, file: File, _token?: string, language?: string,
 ) {
   const fd = new FormData();
-  fd.append("notebook_id", notebookId);
   fd.append("file", file);
-  const res = await fetch(`${API}/api/sources/upload`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: fd,
-  });
-  if (!res.ok) throw new Error("AtlasLM could not ingest this source.");
-  return res.json();
+  if (language) fd.append("language", language);
+  return apiClient.postForm(`/api/v1/workspaces/${notebookId}/documents`, fd);
 }
 
 export async function addUrlSource(
-  notebookId: string, url: string, token: string,
+  notebookId: string, url: string, _token?: string, language?: string,
 ) {
-  const res = await fetch(`${API}/api/sources/url`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ notebook_id: notebookId, url }),
+  const request = buildLinkIngestRequest({
+    workspaceId: notebookId,
+    rawUrl: url,
+    language,
   });
-  if (!res.ok) throw new Error("AtlasLM could not ingest this URL.");
-  return res.json();
+  return apiClient.post(request.path, request.body);
 }
 
 /** Format a chunk citation label: timestamp for audio/yt, else page/sheet. */
@@ -56,7 +50,7 @@ export function citationLabel(meta: {
     if (meta.source_label === "Web" && meta.external_url) {
       try {
         return `Web · ${new URL(meta.external_url).hostname}`;
-      } catch (e) {
+      } catch {
         return `Web`;
       }
     }

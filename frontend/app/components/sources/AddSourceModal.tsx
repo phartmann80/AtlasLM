@@ -2,33 +2,17 @@
 
 import React, { useState, useRef } from "react";
 import { apiClient } from "@/lib/apiClient";
-
-const TRANSCRIPTION_LANGUAGES = [
-  { value: "auto", label: "Auto detect" },
-  { value: "en", label: "English" },
-  { value: "de", label: "German" },
-  { value: "es", label: "Spanish" },
-  { value: "fr", label: "French" },
-  { value: "pt", label: "Portuguese" },
-  { value: "it", label: "Italian" },
-  { value: "nl", label: "Dutch" },
-  { value: "ar", label: "Arabic" },
-  { value: "hi", label: "Hindi" },
-  { value: "ja", label: "Japanese" },
-  { value: "ko", label: "Korean" },
-  { value: "zh", label: "Chinese" },
-];
+import { TRANSCRIPTION_LANGUAGES, buildLinkIngestRequest } from "@/lib/ingest";
 
 export default function AddSourceModal({
   notebookId,
-  token,
   onClose,
   onAdded,
 }: {
   notebookId: string;
-  token: string;
+  token?: string;
   onClose: () => void;
-  onAdded?: (result: any) => void;
+  onAdded?: (result: unknown) => void;
 }) {
   const [active, setActive] = useState<"link" | "website" | "youtube" | "audio" | "paste" | null>(null);
   const [url, setUrl] = useState("");
@@ -43,36 +27,25 @@ export default function AddSourceModal({
   const [selectedFileType, setSelectedFileType] = useState<"pdf" | "docx" | "xlsx" | "pptx" | "audio" | "image" | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  function cleanErrorMessage(error: any): string {
-    const msg = error?.message || "";
+  function cleanErrorMessage(error: unknown): string {
+    const msg = error instanceof Error ? error.message : "";
     if (msg.includes(" -> ") || msg.includes("→") || msg.includes(" : ") || msg.includes("status:")) {
       try {
         const jsonMatch = msg.match(/(\{.*\})/);
         if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[1]);
+          const parsed = JSON.parse(jsonMatch[1]) as { detail?: string | Array<{ msg?: string }> };
           if (parsed.detail) {
             if (typeof parsed.detail === "string") return parsed.detail;
             if (Array.isArray(parsed.detail)) {
-              return parsed.detail.map((d: any) => d.msg || JSON.stringify(d)).join(", ");
+              return parsed.detail.map((item) => item.msg || JSON.stringify(item)).join(", ");
             }
           }
         }
-      } catch (e) {
-        // ignore
+      } catch {
+        // Keep the transport error when the body is not JSON.
       }
     }
     return msg || "AtlasLM could not ingest this source.";
-  }
-
-  function normalizeUrlInput(value: string): string {
-    const trimmed = value.trim();
-    if (!trimmed) return "";
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
-    return `https://${trimmed}`;
-  }
-
-  function isYouTubeUrl(value: string): boolean {
-    return /(^|\.)youtube\.com|(^|\.)youtu\.be/i.test(value);
   }
 
   function handleFileClick(type: "pdf" | "docx" | "xlsx" | "pptx" | "audio" | "image") {
@@ -107,10 +80,10 @@ export default function AddSourceModal({
       if (selectedFileType === "audio") {
         fd.append("language", transcriptionLanguage);
       }
-      const res = await apiClient.postForm<any>(`/api/v1/workspaces/${notebookId}/documents`, fd);
+      const res = await apiClient.postForm<unknown>(`/api/v1/workspaces/${notebookId}/documents`, fd);
       onAdded?.(res);
       onClose();
-    } catch (error: any) {
+    } catch (error) {
       setErr(cleanErrorMessage(error));
     } finally {
       setBusy(false);
@@ -123,10 +96,15 @@ export default function AddSourceModal({
     setBusy(true);
     setErr(null);
     try {
-      const res = await apiClient.post<any>(`/api/v1/workspaces/${notebookId}/documents/url`, { url: normalizeUrlInput(url) });
+      const request = buildLinkIngestRequest({
+        workspaceId: notebookId,
+        rawUrl: url,
+        language: transcriptionLanguage,
+      });
+      const res = await apiClient.post<unknown>(request.path, request.body);
       onAdded?.(res);
       onClose();
-    } catch (error: any) {
+    } catch (error) {
       setErr(cleanErrorMessage(error));
     } finally {
       setBusy(false);
@@ -138,13 +116,15 @@ export default function AddSourceModal({
     setBusy(true);
     setErr(null);
     try {
-      const res = await apiClient.post<any>(`/api/v1/workspaces/${notebookId}/documents/youtube`, {
-        url: normalizeUrlInput(url),
+      const request = buildLinkIngestRequest({
+        workspaceId: notebookId,
+        rawUrl: url,
         language: transcriptionLanguage,
       });
+      const res = await apiClient.post<unknown>(request.path, request.body);
       onAdded?.(res);
       onClose();
-    } catch (error: any) {
+    } catch (error) {
       setErr(cleanErrorMessage(error));
     } finally {
       setBusy(false);
@@ -155,19 +135,18 @@ export default function AddSourceModal({
     if (!rawUrl.trim()) return;
     setBusy(true);
     setErr(null);
-    const normalized = normalizeUrlInput(rawUrl);
     try {
-      const youtubeLink = isYouTubeUrl(normalized);
-      const path = youtubeLink
-        ? `/api/v1/workspaces/${notebookId}/documents/youtube`
-        : `/api/v1/workspaces/${notebookId}/documents/url`;
-      const body = youtubeLink
-        ? { url: normalized, language: transcriptionLanguage }
-        : { url: normalized };
-      const res = await apiClient.post<any>(path, body);
+      const request = buildLinkIngestRequest({
+        workspaceId: notebookId,
+        rawUrl,
+        language: transcriptionLanguage,
+      });
+      const res = await apiClient.post<unknown>(request.path, request.body, {
+        "Idempotency-Key": crypto.randomUUID(),
+      });
       onAdded?.(res);
       onClose();
-    } catch (error: any) {
+    } catch (error) {
       setErr(cleanErrorMessage(error));
     } finally {
       setBusy(false);
@@ -183,13 +162,13 @@ export default function AddSourceModal({
     setBusy(true);
     setErr(null);
     try {
-      const res = await apiClient.post<any>(`/api/v1/workspaces/${notebookId}/documents/text`, {
+      const res = await apiClient.post<unknown>(`/api/v1/workspaces/${notebookId}/documents/text`, {
         title: pasteTitle.trim() || "Pasted Document",
         content: pasteContent.trim(),
       });
       onAdded?.(res);
       onClose();
-    } catch (error: any) {
+    } catch (error) {
       setErr(cleanErrorMessage(error));
     } finally {
       setBusy(false);

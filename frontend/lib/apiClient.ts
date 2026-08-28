@@ -51,8 +51,12 @@ async function get<T = unknown>(path: string): Promise<T> {
 }
 
 /** POST  -  authenticated JSON request. */
-async function post<T = unknown>(path: string, body: unknown): Promise<T> {
-  const headers = await authHeaders({ "Content-Type": "application/json" });
+async function post<T = unknown>(
+  path: string,
+  body: unknown,
+  extra: Record<string, string> = {}
+): Promise<T> {
+  const headers = await authHeaders({ "Content-Type": "application/json", ...extra });
   const res = await fetch(apiUrl(path), {
     method: "POST",
     headers,
@@ -68,9 +72,10 @@ async function post<T = unknown>(path: string, body: unknown): Promise<T> {
 /** POST  -  multipart/form-data (file upload). No Content-Type header; browser sets boundary. */
 async function postForm<T = unknown>(
   path: string,
-  formData: FormData
+  formData: FormData,
+  extra: Record<string, string> = {}
 ): Promise<T> {
-  const headers = await authHeaders(); // no Content-Type  -  browser auto-sets it with boundary
+  const headers = await authHeaders(extra); // no Content-Type  -  browser auto-sets it with boundary
   const res = await fetch(apiUrl(path), {
     method: "POST",
     headers,

@@ -743,13 +743,56 @@ def get_available_providers():
 
 @router.get("/studio/types")
 def list_studio_types():
-    """Available Studio output types (drives the frontend Studio panel)."""
+    """Studio capabilities the dashboard may render.
+
+    Only enabled types may be started from the UI. Disabled entries stay
+    visible as planned so the dashboard never pretends an unfinished
+    generator is live.
+    """
+    planned = "This Studio tool will be enabled after the notebook-to-report review."
     return {
         "types": [
-            {"id": "mind_map", "label": "Mind Map"},
-            {"id": "study_guide", "label": "Study Guide"},
-            {"id": "quiz", "label": "Quiz"},
-            {"id": "flashcards", "label": "Flashcards"},
+            {
+                "id": "report",
+                "label": "Report",
+                "detail": "Citation-backed report from ready sources",
+                "enabled": True,
+            },
+            {
+                "id": "study_guide",
+                "label": "Study Guide",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
+            {
+                "id": "mind_map",
+                "label": "Mind Map",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
+            {
+                "id": "quiz",
+                "label": "Quiz",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
+            {
+                "id": "flashcards",
+                "label": "Flashcards",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
+            {
+                "id": "audio_overview",
+                "label": "Audio Overview",
+                "detail": planned,
+                "enabled": False,
+                "reason": planned,
+            },
         ]
     }
 
