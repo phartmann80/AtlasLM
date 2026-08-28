@@ -349,6 +349,8 @@ class DocumentPipeline:
 
         logger.info("Worker ingestion start: '%s' (doc %s)", document.filename, document.id)
 
+        self.db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete()
+
         pages_data = self._parse(
             file_bytes,
             file_type,

@@ -37,7 +37,8 @@ import type { LucideIcon } from "lucide-react";
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiClient } from "@/lib/apiClient";
-import { TRANSCRIPTION_LANGUAGES, buildLinkIngestRequest } from "@/lib/ingest";
+import { citationChipLabel, resolveCitation, splitCitedParts } from "@/lib/citations";
+import { TRANSCRIPTION_LANGUAGES, runDashboardLinkIngest, runDashboardSourceRetry } from "@/lib/ingest";
 import UserMenu from "@/components/UserMenu";
 import "./atlas-workspace.css";
 
@@ -67,6 +68,7 @@ type Citation = {
   source_label?: string;
   venue?: string;
   file_type?: string;
+  tag?: string;
 };
 type Message = {
   id: string;
@@ -585,24 +587,20 @@ export default function Dashboard() {
     if (!workspace || !sourceInput.trim()) return;
     setSourceBusy(true);
     setError("");
-    try {
-      const request = buildLinkIngestRequest({
-        workspaceId: workspace.id,
-        rawUrl: sourceInput,
-        language: transcriptionLanguage,
-      });
-      await apiClient.post<Source>(request.path, request.body, {
-        "Idempotency-Key": crypto.randomUUID(),
-      });
-      setNotice("Source added. Atlas is preparing it for grounded answers.");
-      setSourceInput("");
-      await loadSources(workspace.id);
-      setShowSourceComposer(false);
-    } catch (caught) {
-      setError(errorMessage(caught, "Atlas could not reach that link."));
-    } finally {
-      setSourceBusy(false);
-    }
+    setNotice("");
+    const result = await runDashboardLinkIngest({
+      workspaceId: workspace.id,
+      sourceInput,
+      language: transcriptionLanguage,
+      idempotencyKey: crypto.randomUUID(),
+      post: (path, body, headers) => apiClient.post<Source>(path, body, headers),
+      loadSources,
+    });
+    setSourceInput(result.sourceInput);
+    setShowSourceComposer(result.showSourceComposer);
+    setError(result.error);
+    setNotice(result.notice);
+    setSourceBusy(false);
   };
 
   const handleText = async (event: FormEvent) => {
@@ -653,28 +651,37 @@ export default function Dashboard() {
 
   const retrySource = async (source: Source) => {
     if (!workspace) return;
-    if (!source.source_url) {
-      setError("Re-add this file to retry. AtlasLM does not keep the original upload for retry.");
-      return;
-    }
     setSourceBusy(true);
     setError("");
+    setNotice("");
     try {
-      const request = buildLinkIngestRequest({
-        workspaceId: workspace.id,
-        rawUrl: source.source_url,
+      const result = await runDashboardSourceRetry({
+        source,
         language: transcriptionLanguage,
+        idempotencyKey: crypto.randomUUID(),
+        post: (path, body, headers) => apiClient.post<Source>(path, body, headers),
+        loadSources: () => loadSources(workspace.id),
       });
-      await apiClient.del(`/api/v1/documents/${source.id}`);
-      await apiClient.post<Source>(request.path, request.body, {
-        "Idempotency-Key": crypto.randomUUID(),
-      });
-      await loadSources(workspace.id);
-      setNotice("Retry queued. Atlas is indexing the source again.");
+      setError(result.error);
+      setNotice(result.notice);
     } catch (caught) {
-      setError(errorMessage(caught, "Atlas could not retry that source."));
+      setError(errorMessage(caught, "Atlas could not retry that source. The original record is unchanged."));
     } finally {
       setSourceBusy(false);
+    }
+  };
+
+  const clearConversation = async () => {
+    if (!sessionId) {
+      setMessages([]);
+      return;
+    }
+    try {
+      await apiClient.del(`/api/v1/sessions/${sessionId}/messages`);
+      setMessages([]);
+      setNotice("Conversation cleared. Atlas removed the saved history for this session.");
+    } catch (caught) {
+      setError(errorMessage(caught, "Atlas could not clear the saved conversation."));
     }
   };
 
@@ -741,11 +748,10 @@ export default function Dashboard() {
   const renderOutputContent = (output: StudioOutput) => {
     if (output.output_type === "report" && typeof output.content === "string") {
       const citations = output.citations || [];
-      return <div className="output-report-markdown">{output.content.split(/(\[source_\d+\])/g).map((part, index) => {
-        const match = part.match(/^\[source_(\d+)\]$/);
-        if (!match) return <span key={index}>{part}</span>;
-        const citation = citations[Number(match[1]) - 1];
-        return <button type="button" className="citation-chip" key={index} onClick={() => citation && setSelectedCitation(citation)} disabled={!citation}><Quote size={12} /> {citation?.filename || `Source ${match[1]}`}</button>;
+      return <div className="output-report-markdown">{splitCitedParts(output.content).map((part, index) => {
+        if (part.type !== "citation") return <span key={index}>{part.value}</span>;
+        const citation = resolveCitation(part.tag, citations);
+        return <button type="button" className="citation-chip" key={index} onClick={() => citation && setSelectedCitation(citation as Citation)} disabled={!citation}><Quote size={12} /> {citationChipLabel(citation, part.index)}</button>;
       })}</div>;
     }
     if (typeof output.content === "string") {
@@ -777,21 +783,19 @@ export default function Dashboard() {
   };
 
   const renderMessage = (message: Message) => {
-    const parts = message.content.split(/(\[source_\d+\])/g);
     const citations = message.citations || [];
-    return parts.map((part, index) => {
-      const match = part.match(/^\[source_(\d+)\]$/);
-      if (!match) return <span key={`${message.id}-${index}`}>{part}</span>;
-      const citation = citations[Number(match[1])] || citationMap[`source_${match[1]}`];
+    return splitCitedParts(message.content).map((part, index) => {
+      if (part.type !== "citation") return <span key={`${message.id}-${index}`}>{part.value}</span>;
+      const citation = resolveCitation(part.tag, citations, citationMap);
       return (
         <button
           key={`${message.id}-${index}`}
           type="button"
           className="citation-chip"
-          onClick={() => citation && setSelectedCitation(citation)}
+          onClick={() => citation && setSelectedCitation(citation as Citation)}
           disabled={!citation}
         >
-          <Quote size={12} /> {citation?.filename || `Source ${Number(match[1]) + 1}`}
+          <Quote size={12} /> {citationChipLabel(citation, part.index)}
         </button>
       );
     });
@@ -932,7 +936,7 @@ export default function Dashboard() {
 
           {messages.length > 0 || streaming ? (
             <div className="conversation-card">
-              <div className="section-heading"><div><p className="eyebrow">Conversation</p><h2>Working with Atlas</h2></div><button type="button" className="quiet-button" onClick={() => setMessages([])}>Clear</button></div>
+              <div className="section-heading"><div><p className="eyebrow">Conversation</p><h2>Working with Atlas</h2></div><button type="button" className="quiet-button" onClick={() => void clearConversation()}>Clear conversation</button></div>
               <div className="conversation-list">
                 {messages.map((message) => <div className={`message-row ${message.role}`} key={message.id}><span className={`message-avatar ${message.role}`}>{message.role === "assistant" ? <Sparkles size={15} /> : "You"}</span><div className="message-body"><div className="message-meta">{message.role === "assistant" ? "Atlas" : "You"}<span>{message.role === "assistant" ? (message.citations?.length ? "From your sources" : "General knowledge") : ""}</span></div><div className="message-copy">{renderMessage(message)}</div></div></div>)}
                 {streaming && <div className="message-row assistant"><span className="message-avatar assistant"><Sparkles size={15} /></span><div className="message-body"><div className="message-meta">Atlas<span>{streamingHasSources ? "Reading your sources" : "General knowledge"}</span></div><div className="message-copy">{renderMessage({ id: "stream", role: "assistant", content: streaming })}<span className="typing-caret" /></div></div></div>}

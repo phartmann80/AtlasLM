@@ -72,3 +72,94 @@ export function buildLinkIngestRequest(opts: {
     body: { url },
   };
 }
+
+export type JsonPost = (
+  path: string,
+  body: unknown,
+  headers?: Record<string, string>,
+) => Promise<unknown>;
+
+export type DashboardLinkIngestResult = {
+  sourceInput: string;
+  showSourceComposer: boolean;
+  error: string;
+  notice: string;
+  posted: { path: string; body: { url: string; language?: string } };
+};
+
+/**
+ * Production dashboard Paste-a-link submit path.
+ * Always posts `request.path` / `request.body` from buildLinkIngestRequest.
+ * Success clears the URL, reloads sources, and closes the composer.
+ * Failure keeps the entered URL, keeps the composer open, and returns the error.
+ */
+export async function runDashboardLinkIngest(opts: {
+  workspaceId: string;
+  sourceInput: string;
+  language?: string;
+  post: JsonPost;
+  loadSources: (workspaceId: string) => Promise<void>;
+  idempotencyKey: string;
+}): Promise<DashboardLinkIngestResult> {
+  const request = buildLinkIngestRequest({
+    workspaceId: opts.workspaceId,
+    rawUrl: opts.sourceInput,
+    language: opts.language,
+  });
+  try {
+    await opts.post(request.path, request.body, {
+      "Idempotency-Key": opts.idempotencyKey,
+    });
+    await opts.loadSources(opts.workspaceId);
+    return {
+      sourceInput: "",
+      showSourceComposer: false,
+      error: "",
+      notice: "Source added. Atlas is preparing it for grounded answers.",
+      posted: request,
+    };
+  } catch (caught) {
+    const message = caught instanceof Error && caught.message
+      ? caught.message
+      : "Atlas could not reach that link.";
+    return {
+      sourceInput: opts.sourceInput,
+      showSourceComposer: true,
+      error: message,
+      notice: "",
+      posted: request,
+    };
+  }
+}
+
+export function sourceRetryPath(documentId: string): string {
+  return `/api/v1/documents/${documentId}/retry`;
+}
+
+export async function runDashboardSourceRetry(opts: {
+  source: { id: string; source_url?: string | null; file_type?: string };
+  language?: string;
+  post: JsonPost;
+  del?: (path: string) => Promise<void>;
+  loadSources: () => Promise<void>;
+  idempotencyKey: string;
+}): Promise<{ error: string; notice: string }> {
+  const kind = (opts.source.file_type || "").toLowerCase();
+  const isLink = Boolean(opts.source.source_url) || kind.includes("url") || kind.includes("youtube") || kind.includes("web");
+  if (!isLink) {
+    return {
+      error: "Re-add this file to retry. AtlasLM does not keep the original upload for retry.",
+      notice: "",
+    };
+  }
+  await opts.post(
+    sourceRetryPath(opts.source.id),
+    { language: opts.language?.trim() || "auto" },
+    { "Idempotency-Key": opts.idempotencyKey },
+  );
+  await opts.loadSources();
+  return {
+    error: "",
+    notice: "Retry queued. Atlas is indexing the same source again.",
+  };
+}
