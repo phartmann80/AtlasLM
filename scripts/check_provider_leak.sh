@@ -17,7 +17,7 @@ PATTERN='langdock\|openrouter\|openai\|anthropic\|gemini\|api\.openai\|googleapi
 
 # Lines that are safe to ignore (env var NAMES in compose, harmless warnings).
 # We never want to match the literal env KEY names that legitimately exist.
-IGNORE='attribute .version. is obsolete\|LANGDOCK_API_KEY\|OPENROUTER_API_KEY\|LANGDOCK_ENDPOINT_URL'
+IGNORE='attribute .version. is obsolete\|LANGDOCK_API_KEY\|OPENROUTER_API_KEY\|LANGDOCK_ENDPOINT_URL\|OPENAI_API_KEY\|GEMINI_API_KEY'
 
 if [ "$#" -ge 1 ]; then
   INPUT=$(cat "$1")
