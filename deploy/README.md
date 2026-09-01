@@ -1,8 +1,8 @@
 # AtlasLM dedicated-server staging deployment
 
-Repository changes only. This tree is not installed and does not deploy.
+Repository changes only. This document does not deploy.
 
-Do not deploy current `main`. Do not merge, install `atlaslmctl`, install sudoers, populate secrets, or deploy until this PR is independently approved. Do not change server, DNS, firewall, TLS, production, or `/etc/atlaslm` permissions.
+Do not populate secrets in git. Do not change server, DNS, firewall, TLS, production, or `/etc/atlaslm` permissions from this tree.
 
 ## Trust boundary
 
@@ -33,7 +33,20 @@ Order comes from `deploy/migrations.manifest.json`, not filename globs. Apply is
 
 ## After independent review (not part of this PR)
 
-Populate `/etc/atlaslm/staging.env` as root. `NEXT_PUBLIC_*` values are required at frontend image build time. Never pass `SUPABASE_SERVICE_ROLE_KEY` as a frontend build argument.
+Populate `/etc/atlaslm/staging.env` as root using
+`docs/STAGING_FIRST_ENV_REQUIREMENTS.md` and `deploy/staging/env.example`.
+`NEXT_PUBLIC_*` values are required at frontend image build time. Never pass
+`SUPABASE_SERVICE_ROLE_KEY` as a frontend build argument.
+
+Value-safe check (prints only SET, EMPTY, MISSING, VALID_FORMAT, INVALID_FORMAT):
+
+```sh
+python3 deploy/validate_staging_env.py /etc/atlaslm/staging.env
+```
+
+First staging keeps `ATLAS_*_RUNTIME=legacy`, so the Mastra **gateway** may stay
+empty. The Mastra **container** and `/health` check stay required. Do not point
+`GATEWAY_API_URL` at a production gateway.
 
 ### Wrapper installation
 
