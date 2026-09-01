@@ -436,27 +436,41 @@ That is the **merge commit** created when this PR is merged into `main` with a
 normal merge commit, not a squash. Do not treat the reviewed PR head as the
 deploy SHA.
 
-After that merge, the fail-closed proof is:
+After that merge, run this fail-closed proof. `REVIEWED_PR8_HEAD` is an
+operator-supplied variable. It must come from the **final independent approval
+record** for PR #8. It must be the **exact PR head that was approved**, not
+merely an earlier substantive commit on the branch. Do not hardcode that head
+in this document.
 
 ```sh
+set -eu
+
+: "${REVIEWED_PR8_HEAD:?Set this to the exact independently approved PR #8 head}"
+
+test "$(printf '%s' "$REVIEWED_PR8_HEAD" | grep -E '^[0-9a-f]{40}$')" = "$REVIEWED_PR8_HEAD"
+
 git fetch origin main
 MAIN_SHA="$(git rev-parse origin/main)"
 test "$(printf '%s' "$MAIN_SHA" | grep -E '^[0-9a-f]{40}$')" = "$MAIN_SHA"
-git merge-base --is-ancestor ceb03f26fd5482aa0bbe33b2dbb5bb89a0d84d66 origin/main
+
+git merge-base --is-ancestor "$REVIEWED_PR8_HEAD" origin/main
 git merge-base --is-ancestor 6085582c8dc4d7dba656c3a95109365145229dd7 origin/main
+
 printf 'MAIN_SHA=%s\n' "$MAIN_SHA"
 ```
 
-`ceb03f26fd5482aa0bbe33b2dbb5bb89a0d84d66` is the reviewed PR #8 head used only
-for the ancestry proof (the revision that resolved the three substantive
-blockers). `6085582c8dc4d7dba656c3a95109365145229dd7` is the reviewed PR #7
-commit. Neither is the deployment SHA.
+`set -eu` makes any failed validation, fetch, `rev-parse`, or ancestry command
+stop the sequence. A later `printf` cannot succeed after a failed check.
 
-The first-staging candidate is the normal merge commit reported by
-`git rev-parse origin/main` after this sequence exits 0.
+`6085582c8dc4d7dba656c3a95109365145229dd7` is the reviewed PR #7 commit. It is
+not the deployment SHA.
 
-Until that merge exists, there is no approved first-staging deploy SHA. Do not
-deploy in this PR.
+`MAIN_SHA` is the first-staging deployment candidate **only after this full
+sequence exits 0**. The later main-push CI must pass on that exact `MAIN_SHA`.
+Do not deploy `REVIEWED_PR8_HEAD`. Do not deploy the PR #7 SHA.
+
+Until that merge exists and this sequence exits 0, there is no approved
+first-staging deploy SHA. Do not deploy in this PR.
 
 ## Out of scope
 
