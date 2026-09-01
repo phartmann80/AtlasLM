@@ -6,10 +6,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createAtlasTools, atlasCall, type AtlasHeaders } from "./atlas-tools.js";
 
 const port = Number(process.env.PORT || 8110);
-const modelName = process.env.MASTRA_MODEL || "openai/gpt-5-mini";
-const gateway = (process.env.GATEWAY_API_URL || "https://gateway-api.mastra.ai").replace(/\/$/, "");
+const modelName = process.env.MASTRA_MODEL || "atlas-internal";
+const gateway = (process.env.GATEWAY_API_URL || "").replace(/\/$/, "");
 const gatewayProvider = createOpenAI({
-  baseURL: `${gateway}/v1`,
+  // Empty gateway is valid for first staging while legacy runtimes are selected.
+  // Generate() fails closed against a local black hole instead of a production gateway.
+  baseURL: gateway ? `${gateway}/v1` : "http://127.0.0.1:9/v1",
   apiKey: process.env.GATEWAY_API_MASTRA_KEY || "",
 });
 
