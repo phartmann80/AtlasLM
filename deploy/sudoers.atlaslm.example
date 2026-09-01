@@ -1,13 +1,7 @@
 # Exact sudoers rule for AtlasLM staging-only commands.
-# Install later as root after this PR is reviewed.
+# Install later as root after this PR is independently reviewed.
 # Do not grant docker group membership or unrestricted sudo.
-#
-# Parameterization uses wrapper defaults and environment variables:
-#   ATLASLM_APP_ROOT=/srv/atlaslm/staging
-#   ATLASLM_STAGING_ENV_FILE=/etc/atlaslm/staging.env
-#   ATLASLM_COMPOSE_PROJECT=atlaslm-staging
-#   ATLASLM_HEALTH_URL=https://api.staging.atlaslm.cloud/health
-# The wrapper still rejects production, unknown arguments, unapproved
-# Compose files, and non-SHA release IDs.
+# The wrapper ignores caller environment and optional flags. atlasdeploy
+# cannot supply Compose files, remotes, health URLs, or application roots.
 
 atlasdeploy ALL=(root) NOPASSWD: /usr/local/sbin/atlaslmctl staging deploy *, /usr/local/sbin/atlaslmctl staging rollback *, /usr/local/sbin/atlaslmctl staging status, /usr/local/sbin/atlaslmctl staging logs

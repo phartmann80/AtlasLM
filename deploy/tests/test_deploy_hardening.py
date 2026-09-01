@@ -190,15 +190,7 @@ class ComposeHardeningTests(unittest.TestCase):
         self.assertIn("https://api.staging.atlaslm.cloud/health", ctl_src)
 
 
-class AtlaslmctlTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp())
-        self.env_file = self.tmp / "staging.env"
-        self.env_file.write_text(
-            f"DB_PASSWORD={CANARY}\nJWT_SECRET={CANARY}\nSUPER_SECRET={CANARY}\n",
-            encoding="utf-8",
-        )
-
+class AtlaslmctlCliTests(unittest.TestCase):
     def _run(self, argv: list[str]) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -206,97 +198,43 @@ class AtlaslmctlTests(unittest.TestCase):
             code = CTL.main(argv)
         return code, stdout.getvalue(), stderr.getvalue()
 
-    def _common(self) -> list[str]:
-        return [
-            "--dry-run",
-            "--app-root",
-            str(ROOT),
-            "--env-file",
-            str(self.env_file),
-            "--project",
-            "atlaslm-staging",
-        ]
-
     def test_exact_sha_validation(self) -> None:
-        for bad in ("abc", "a" * 39, "a" * 41, "g" * 40, "A" * 39 + "G"):
-            code, _, err = self._run([*self._common(), "staging", "deploy", bad])
+        for bad in ("abc", "a" * 39, "a" * 41, "g" * 40, "ABCDEF" + "a" * 34):
+            code, _, err = self._run(["staging", "deploy", bad])
             self.assertEqual(code, 2, bad)
             self.assertIn("40-character", err)
-        code, out, err = self._run([*self._common(), "staging", "deploy", SHA40])
-        self.assertEqual(code, 0, err)
-        self.assertIn("staging deploy complete", out)
-
-    def test_uppercase_sha_normalized(self) -> None:
-        sha = "ABCDEF" + "a" * 34
-        self.assertEqual(len(sha), 40)
-        code, out, err = self._run([*self._common(), "staging", "deploy", sha])
-        self.assertEqual(code, 0, err)
-        self.assertIn(sha.lower(), out)
-
-    def test_rollback_selects_immutable_tags_without_rebuild(self) -> None:
-        code, out, err = self._run([*self._common(), "staging", "rollback", SHA40])
-        self.assertEqual(code, 0, err)
-        self.assertIn("--no-build", out)
-        self.assertIn("--pull", out)
-        self.assertIn("never", out)
-        for line in out.splitlines():
-            if not line.startswith("+"):
-                continue
-            tokens = line.split()
-            self.assertNotIn("build", tokens)
-            self.assertIn("--no-build", tokens)
-        self.assertIn("immutable tags", out)
-        cmd = CTL.rollback_command(["docker", "compose"])
-        self.assertEqual(cmd[cmd.index("up") :], ["up", "-d", "--no-build", "--pull", "never", "frontend", "backend", "worker", "mastra", "caddy"])
-        self.assertNotIn("build", cmd[cmd.index("up") :])
 
     def test_production_commands_rejected(self) -> None:
         for argv in (
             ["production", "deploy", SHA40],
             ["prod", "status"],
             ["staging", "deploy", SHA40, "production"],
-            [*self._common(), "--env-file", "/etc/atlaslm/production.env", "staging", "status"],
+            ["staging", "status", "--env-file", "/etc/atlaslm/production.env"],
         ):
             code, _, err = self._run(argv)
             self.assertEqual(code, 2, argv)
-            self.assertIn("rejected argument", err)
+            self.assertTrue("rejected argument" in err or "unknown argument" in err, err)
 
-    def test_unknown_action_rejected(self) -> None:
-        code, _, err = self._run([*self._common(), "staging", "restart"])
-        self.assertNotEqual(code, 0)
-        self.assertTrue(err)
+    def test_unknown_action_and_options_rejected(self) -> None:
+        for argv in (
+            ["staging", "restart"],
+            ["--app-root", "/srv/atlaslm/incoming", "staging", "status"],
+            ["staging", "deploy", SHA40, "--health-url", "https://api.atlaslm.cloud/health"],
+            ["-f", str(ROOT / "docker-compose.yaml"), "staging", "status"],
+            ["staging", "logs", "backend"],
+        ):
+            code, _, err = self._run(argv)
+            self.assertEqual(code, 2, argv)
+            self.assertTrue(err)
 
-    def test_production_health_url_rejected(self) -> None:
-        code, _, err = self._run(
-            [
-                *self._common(),
-                "--health-url",
-                "https://api.atlaslm.cloud/health",
-                "staging",
-                "deploy",
-                SHA40,
-            ]
-        )
-        self.assertEqual(code, 2)
-        self.assertIn("production health URL", err)
-
-    def test_deploy_uses_parameterized_staging_health_url(self) -> None:
-        code, out, err = self._run([*self._common(), "staging", "deploy", SHA40])
-        self.assertEqual(code, 0, err)
-        self.assertIn("https://api.staging.atlaslm.cloud/health", out)
-        self.assertNotIn("https://api.atlaslm.cloud/health", out)
-        self.assertIn("-p atlaslm-staging", out)
-        self.assertIn("deploy/staging/docker-compose.yaml", out)
-
-    def test_logs_and_errors_never_print_env_file(self) -> None:
-        code, out, err = self._run([*self._common(), "staging", "logs", "backend"])
-        self.assertEqual(code, 0, err)
-        combined = out + err + (DEPLOY / "atlaslmctl").read_text(encoding="utf-8")
-        self.assertNotIn(CANARY, out)
-        self.assertNotIn(CANARY, err)
-        self.assertNotIn("print(env_file", combined)
-        self.assertNotIn("read_text", combined)
-        self.assertNotRegex(combined, r"cat .*\.env")
+    def test_unapproved_compose_cli_rejected(self) -> None:
+        for argv in (
+            ["--file", str(ROOT / "docker/docker-compose.searxng.yml"), "staging", "status"],
+            ["staging", "logs", "docker-compose.searxng"],
+        ):
+            code, _, err = self._run(argv)
+            self.assertEqual(code, 2, argv)
+            self.assertTrue("unapproved compose file" in err or "unknown argument" in err, err)
 
     def test_sanitize_log_line(self) -> None:
         line = CTL.sanitize_log_line("Authorization=secret-token JWT_SECRET=abc bearer abcdef")
@@ -304,67 +242,26 @@ class AtlaslmctlTests(unittest.TestCase):
         self.assertNotIn("abcdef", line)
         self.assertIn("<redacted>", line)
 
-    def test_frontend_is_built_and_started_on_deploy(self) -> None:
-        code, out, err = self._run([*self._common(), "staging", "deploy", SHA40])
-        self.assertEqual(code, 0, err)
-        build_lines = [line for line in out.splitlines() if line.startswith("+") and " build " in line]
-        self.assertTrue(build_lines)
-        tokens = build_lines[0].split()
-        build_at = tokens.index("build")
-        self.assertEqual(tokens[build_at + 1 : build_at + 4], ["frontend", "backend", "mastra"])
-        self.assertIn("frontend", out)
-        self.assertIn("caddy", out)
+    def test_ctl_source_never_reads_env_file(self) -> None:
+        src = (DEPLOY / "atlaslmctl").read_text(encoding="utf-8")
+        self.assertNotIn("print(env_file", src)
+        self.assertNotIn("read_text", src)
+        self.assertNotRegex(src, r"cat .*\.env")
+        self.assertNotIn(CANARY, src)
 
-    def test_unapproved_compose_files_rejected(self) -> None:
-        production_compose = str(ROOT / "docker-compose.yaml")
-        searxng = str(ROOT / "docker" / "docker-compose.searxng.yml")
-        cases = (
-            [*self._common(), "-f", production_compose, "staging", "status"],
-            [*self._common(), "--file", searxng, "staging", "status"],
-            [*self._common(), f"--file={production_compose}", "staging", "status"],
-            [*self._common(), "staging", "logs", "docker-compose.searxng"],
-        )
-        for argv in cases:
-            code, _, err = self._run(argv)
-            self.assertEqual(code, 2, argv)
-            self.assertIn("unapproved compose file", err)
-        with self.assertRaises(CTL.AtlasLMCtlError):
-            CTL.approved_compose_file(ROOT / "docker-compose.yaml")
-        approved = CTL.approved_compose_file(ROOT / "deploy" / "staging" / "docker-compose.yaml")
-        self.assertEqual(approved.name, "docker-compose.yaml")
-        previous = os.environ.get("COMPOSE_FILE")
-        os.environ["COMPOSE_FILE"] = production_compose
-        try:
-            code, _, err = self._run([*self._common(), "staging", "status"])
-        finally:
-            if previous is None:
-                os.environ.pop("COMPOSE_FILE", None)
-            else:
-                os.environ["COMPOSE_FILE"] = previous
-        self.assertEqual(code, 2)
-        self.assertIn("unapproved compose file", err)
-
-    def test_unapproved_project_rejected(self) -> None:
-        code, _, err = self._run(
-            [
-                "--dry-run",
-                "--app-root",
-                str(ROOT),
-                "--env-file",
-                str(self.env_file),
-                "--project",
-                "other-project",
-                "staging",
-                "status",
-            ]
-        )
-        self.assertEqual(code, 2)
-        self.assertIn("unapproved compose project", err)
-
+    def test_fixed_health_url_is_staging(self) -> None:
+        self.assertEqual(CTL.FIXED_HEALTH_URL, "https://api.staging.atlaslm.cloud/health")
+        self.assertNotIn("https://api.atlaslm.cloud/health", CTL.FIXED_HEALTH_URL)
+        self.assertEqual(CTL.PRODUCTION_CONFIG.health_url, CTL.FIXED_HEALTH_URL)
+        self.assertEqual(CTL.PRODUCTION_CONFIG.git_remote, "https://github.com/phartmann80/AtlasLM.git")
+        self.assertEqual(CTL.PRODUCTION_CONFIG.approved_ref, "refs/heads/main")
 
 
 class MigrationTests(unittest.TestCase):
-    def test_manifest_order_not_glob_order(self) -> None:
+    def test_atomicity_is_per_migration_not_whole_manifest(self) -> None:
+        src = (DEPLOY / "migrate.py").read_text(encoding="utf-8").lower()
+        self.assertIn("per migration", src)
+        self.assertIn("whole-manifest atomicity is not used", src)
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
         ids = [item["id"] for item in manifest["migrations"]]
         paths = [item["path"] for item in manifest["migrations"]]

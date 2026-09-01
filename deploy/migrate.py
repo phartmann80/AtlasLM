@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Deterministic AtlasLM SQL migrator. Order comes from the manifest, not globs."""
+"""Deterministic AtlasLM SQL migrator. Order comes from the manifest, not globs.
+
+Atomicity is per migration, not across the whole manifest. Each unapplied
+migration runs in its own transaction: the SQL script and the registry insert
+either both commit or both roll back. Previously committed migrations stay
+applied if a later migration fails. Whole-manifest atomicity is not used
+because several historical scripts are operational DDL plus diagnostic
+statements rather than a single verified transaction-compatible batch.
+"""
 
 from __future__ import annotations
 

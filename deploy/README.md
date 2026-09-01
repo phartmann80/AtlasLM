@@ -2,42 +2,38 @@
 
 Repository changes only. This tree is not installed and does not deploy.
 
-Do not deploy current `main`. Do not change server, DNS, firewall, TLS, production, secrets, or `/etc/atlaslm` permissions. `/etc/atlaslm` is `0700`; `staging.env` and `production.env` are `root:root` `0600`. Leave those permissions unchanged.
+Do not deploy current `main`. Do not merge, install `atlaslmctl`, install sudoers, populate secrets, or deploy until this PR is independently approved. Do not change server, DNS, firewall, TLS, production, or `/etc/atlaslm` permissions.
 
-Server layout used by the wrapper defaults:
+## Trust boundary
 
-- `/srv/atlaslm/staging` application root (writable by `atlasdeploy`)
-- `/srv/atlaslm/releases` immutable SHA trees (writable by `atlasdeploy`)
-- `/etc/atlaslm/staging.env` root-owned environment file (not readable by `atlasdeploy`)
+`atlasdeploy` is unprivileged. It may write only `/srv/atlaslm/incoming`. It must not be able to change anything root later executes.
+
+The installed wrapper runs as root via exact sudoers argv and ignores caller environment, optional flags, repository URLs, Compose paths, health URLs, and project names.
+
+| Path | Owner | atlasdeploy | Used by root wrapper |
+| --- | --- | --- | --- |
+| `/srv/atlaslm/incoming` | staging upload/request space | writable | never executed |
+| `/srv/atlaslm/releases/<sha>` | root:root, not group/world writable | not writable | Compose, Docker build contexts, Caddyfile, `migrate.py`, SQL, Git checkout of that SHA |
+| `/srv/atlaslm/runtime/staging` | root-owned symlink into `releases/<sha>` | not writable | status/logs/active release |
+| `/usr/local/sbin/atlaslmctl` | root:root `0750` | not writable | installed wrapper |
+| `/etc/atlaslm/staging.env` | root:root `0600` | not readable or writable | Compose `--env-file` only; never printed |
+| `/etc/atlaslm` | root:root `0700` | cannot inspect | unchanged |
+
+Root obtains the requested commit from the allowlisted remote `https://github.com/phartmann80/AtlasLM.git` into a new `releases/<sha>` directory. The SHA must be 40 lowercase hex characters, a commit object, reachable from `refs/heads/main`, and equal to `git rev-parse HEAD` in that checkout. Symlinks escaping the release root are rejected.
+
+Rollback requires that verified release, requires the SHA-tagged images to already exist, and uses `--no-build --pull never`.
 
 ## Network model
 
-```
-Internet
-   │
-   ├── staging.atlaslm.cloud
-   └── api.staging.atlaslm.cloud
-              │
-        Caddy :80/:443
-              │
-       staging proxy network
-          ├── frontend:3000
-          └── backend:8000
-                  │
-          private application network
-          ├── worker
-          ├── mastra:8110
-          ├── postgres:5432
-          └── redis:6379
-```
+Only Caddy publishes public host ports 80/443. Frontend uses `ATLAS_BACKEND_URL=http://backend:8000`. SearXNG, Deep Research, and optional Studio extras are not started.
 
-Only Caddy publishes public host ports. Frontend reaches the backend at `http://backend:8000` through `ATLAS_BACKEND_URL` on the Compose network. Frontend, backend, worker, Mastra, PostgreSQL, and Redis do not publish host ports.
+## Migrations
 
-## After this PR is reviewed (not part of the PR)
+Order comes from `deploy/migrations.manifest.json`, not filename globs. Apply is atomic **per migration**: one SQL script plus its registry row commit or roll back together. A later failure does not undo earlier successful migrations. Whole-manifest atomicity is not used.
 
-Populate `/etc/atlaslm/staging.env` as root using the names in `deploy/staging/env.example`. Do not print the file. `NEXT_PUBLIC_*` values must be present at frontend image build time. Never pass `SUPABASE_SERVICE_ROLE_KEY` as a frontend build argument.
+## After independent review (not part of this PR)
 
-Checkout the approved SHA into `/srv/atlaslm/staging` before calling deploy. Do not chmod `/etc/atlaslm`.
+Populate `/etc/atlaslm/staging.env` as root. `NEXT_PUBLIC_*` values are required at frontend image build time. Never pass `SUPABASE_SERVICE_ROLE_KEY` as a frontend build argument.
 
 ### Wrapper installation
 
@@ -53,17 +49,15 @@ visudo -cf /etc/sudoers.d/atlaslm-staging
 atlasdeploy ALL=(root) NOPASSWD: /usr/local/sbin/atlaslmctl staging deploy *, /usr/local/sbin/atlaslmctl staging rollback *, /usr/local/sbin/atlaslmctl staging status, /usr/local/sbin/atlaslmctl staging logs
 ```
 
-### Staging deploy
+atlasdeploy may request only those four commands. It cannot pass `--app-root`, `--env-file`, `--file`, remotes, or health URLs.
 
-Builds frontend, backend, and Mastra images tagged with the exact 40-character SHA, then starts frontend, backend, worker, Mastra, PostgreSQL, Redis, and Caddy.
+### Staging deploy
 
 ```sh
 sudo -n /usr/local/sbin/atlaslmctl staging deploy <40-character-sha>
 ```
 
 ### Health checks
-
-Compose healthchecks cover frontend (`:3000`), backend (`/health`), Mastra (`/health`), PostgreSQL (`pg_isready`), Redis (`PING`), worker liveness, and Caddy (`:80`).
 
 ```sh
 sudo -n /usr/local/sbin/atlaslmctl staging status
@@ -73,24 +67,6 @@ curl -fsS https://staging.atlaslm.cloud/
 
 ### Rollback
 
-Selects prior immutable image tags. It does not rebuild an old source tree.
-
 ```sh
 sudo -n /usr/local/sbin/atlaslmctl staging rollback <40-character-sha>
 ```
-
-### Logs
-
-```sh
-sudo -n /usr/local/sbin/atlaslmctl staging logs
-```
-
-Production commands, unknown arguments, unapproved Compose files, and non-SHA release IDs are rejected. The wrapper never prints environment-file contents.
-
-## Migrations
-
-`deploy/migrations.manifest.json` is the apply order. `deploy/migrate.py` records checksums in `atlaslm_schema_migrations` and fails atomically per migration. Filename glob order is not used. `010_ai_runtime.down.sql` is excluded.
-
-## Disabled for this staging release
-
-SearXNG, Deep Research, and optional Studio extras are not started.
