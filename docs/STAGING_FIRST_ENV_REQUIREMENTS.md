@@ -433,13 +433,27 @@ contains both:
 - the reviewed PR #8 configuration review (this change)
 
 That is the **merge commit** created when this PR is merged into `main` with a
-normal merge commit, not a squash. After that merge:
+normal merge commit, not a squash. Do not treat the reviewed PR head as the
+deploy SHA.
+
+After that merge, the fail-closed proof is:
 
 ```sh
 git fetch origin main
-git rev-parse origin/main
-git merge-base --is-ancestor <reviewed-pr-8-head> origin/main
+MAIN_SHA="$(git rev-parse origin/main)"
+test "$(printf '%s' "$MAIN_SHA" | grep -E '^[0-9a-f]{40}$')" = "$MAIN_SHA"
+git merge-base --is-ancestor ceb03f26fd5482aa0bbe33b2dbb5bb89a0d84d66 origin/main
+git merge-base --is-ancestor 6085582c8dc4d7dba656c3a95109365145229dd7 origin/main
+printf 'MAIN_SHA=%s\n' "$MAIN_SHA"
 ```
+
+`ceb03f26fd5482aa0bbe33b2dbb5bb89a0d84d66` is the reviewed PR #8 head used only
+for the ancestry proof (the revision that resolved the three substantive
+blockers). `6085582c8dc4d7dba656c3a95109365145229dd7` is the reviewed PR #7
+commit. Neither is the deployment SHA.
+
+The first-staging candidate is the normal merge commit reported by
+`git rev-parse origin/main` after this sequence exits 0.
 
 Until that merge exists, there is no approved first-staging deploy SHA. Do not
 deploy in this PR.
