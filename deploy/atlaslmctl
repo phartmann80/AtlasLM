@@ -10,7 +10,8 @@ Supported commands:
   atlaslmctl staging status
   atlaslmctl staging logs [service]
 
-Never prints environment-file contents. Rejects production and unknown arguments.
+Never prints environment-file contents. Rejects production, unknown arguments,
+unapproved Compose files, and non-SHA release IDs.
 """
 
 from __future__ import annotations
@@ -29,9 +30,10 @@ SAFE_SERVICE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 FORBIDDEN_WORDS = ("production", "prod", "live")
 PRODUCTION_HEALTH = "https://api.atlaslm.cloud/health"
 
-DEFAULT_APP_ROOT = "/srv/atlaslm"
+DEFAULT_APP_ROOT = "/srv/atlaslm/staging"
 DEFAULT_ENV_FILE = "/etc/atlaslm/staging.env"
 DEFAULT_PROJECT = "atlaslm-staging"
+APPROVED_COMPOSE_NAMES = {"docker-compose.yaml", "docker-compose.yml"}
 DEFAULT_STAGING_HOST = "staging.atlaslm.cloud"
 DEFAULT_API_HOST = "api.staging.atlaslm.cloud"
 DEFAULT_HEALTH_URL = "https://api.staging.atlaslm.cloud/health"
@@ -69,6 +71,44 @@ def reject_forbidden(tokens: Sequence[str]) -> None:
             _fail(f"rejected argument: {token}")
         if "production" in lowered or lowered.endswith("-prod"):
             _fail(f"rejected argument: {token}")
+        if token in {"-f", "--file"} or lowered.startswith("--file=") or lowered.startswith("--compose-file"):
+            _fail("unapproved compose file")
+        if "docker-compose.searxng" in lowered:
+            _fail("unapproved compose file")
+
+
+def reject_compose_overrides() -> None:
+    if os.environ.get("COMPOSE_FILE", "").strip():
+        _fail("unapproved compose file")
+
+
+def approved_compose_file(path: Path) -> Path:
+    require_file(path, "compose file")
+    try:
+        resolved = path.resolve()
+    except OSError:
+        _fail("unapproved compose file")
+    parts = resolved.parts
+    if len(parts) < 3:
+        _fail("unapproved compose file")
+    if parts[-1] not in APPROVED_COMPOSE_NAMES:
+        _fail("unapproved compose file")
+    if parts[-2] != "staging" or parts[-3] != "deploy":
+        _fail("unapproved compose file")
+    return resolved
+
+
+def approved_project(project: str) -> str:
+    if project != DEFAULT_PROJECT:
+        _fail("unapproved compose project")
+    return project
+
+
+def approved_env_file(path: Path) -> Path:
+    require_file(path, "environment file")
+    if path.name != "staging.env":
+        _fail("environment file not found")
+    return path
 
 
 def _env_bool(name: str) -> bool:
@@ -203,11 +243,10 @@ def _run(
 def cmd_deploy(args: argparse.Namespace) -> None:
     sha = validate_sha(args.sha)
     root = source_root(Path(args.app_root))
-    env_file = Path(args.env_file)
-    project = args.project
+    env_file = approved_env_file(Path(args.env_file))
+    project = approved_project(args.project)
     dry_run = args.dry_run
-    require_file(env_file, "environment file")
-    compose_file = require_file(root / COMPOSE_REL, "compose file")
+    compose_file = approved_compose_file(root / COMPOSE_REL)
     require_file(root / MIGRATE_REL, "migration runner")
     require_file(root / MANIFEST_REL, "migration manifest")
 
@@ -225,11 +264,10 @@ def cmd_deploy(args: argparse.Namespace) -> None:
 def cmd_rollback(args: argparse.Namespace) -> None:
     sha = validate_sha(args.sha)
     root = source_root(Path(args.app_root))
-    env_file = Path(args.env_file)
-    project = args.project
+    env_file = approved_env_file(Path(args.env_file))
+    project = approved_project(args.project)
     dry_run = args.dry_run
-    require_file(env_file, "environment file")
-    compose_file = require_file(root / COMPOSE_REL, "compose file")
+    compose_file = approved_compose_file(root / COMPOSE_REL)
     env = release_env(sha, project)
     compose = compose_command(env_file=env_file, project=project, compose_file=compose_file)
     cmd = rollback_command(compose)
@@ -241,11 +279,12 @@ def cmd_rollback(args: argparse.Namespace) -> None:
 
 def cmd_status(args: argparse.Namespace) -> None:
     root = source_root(Path(args.app_root))
-    env_file = require_file(Path(args.env_file), "environment file")
+    env_file = approved_env_file(Path(args.env_file))
+    project = approved_project(args.project)
     compose = compose_command(
         env_file=env_file,
-        project=args.project,
-        compose_file=require_file(root / COMPOSE_REL, "compose file"),
+        project=project,
+        compose_file=approved_compose_file(root / COMPOSE_REL),
     )
     _run(compose + ["ps"], dry_run=args.dry_run)
 
@@ -255,11 +294,12 @@ def cmd_logs(args: argparse.Namespace) -> None:
     if service and not SAFE_SERVICE_RE.fullmatch(service):
         _fail("invalid service name")
     root = source_root(Path(args.app_root))
-    env_file = require_file(Path(args.env_file), "environment file")
+    env_file = approved_env_file(Path(args.env_file))
+    project = approved_project(args.project)
     compose = compose_command(
         env_file=env_file,
-        project=args.project,
-        compose_file=require_file(root / COMPOSE_REL, "compose file"),
+        project=project,
+        compose_file=approved_compose_file(root / COMPOSE_REL),
     )
     cmd = compose + ["logs", "--no-color", "--tail", "200"]
     if service:
@@ -283,7 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--app-root",
         default=os.environ.get("ATLASLM_APP_ROOT", DEFAULT_APP_ROOT),
-        help="Application root containing deploy/staging (default: /srv/atlaslm or ATLASLM_APP_ROOT)",
+        help="Application root containing deploy/staging (default: /srv/atlaslm/staging)",
     )
     parser.add_argument(
         "--env-file",
@@ -331,6 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         reject_forbidden(argv)
+        reject_compose_overrides()
         parser = build_parser()
         try:
             args = parser.parse_args(argv)

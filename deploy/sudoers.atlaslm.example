@@ -1,9 +1,13 @@
-# Exact sudoers rules for AtlasLM staging-only commands.
-# Install later as root after this PR is reviewed:
-#   install -o root -g root -m 0440 deploy/sudoers.atlaslm.example /etc/sudoers.d/atlaslm-staging
-#   visudo -cf /etc/sudoers.d/atlaslm-staging
+# Exact sudoers rule for AtlasLM staging-only commands.
+# Install later as root after this PR is reviewed.
 # Do not grant docker group membership or unrestricted sudo.
+#
+# Parameterization uses wrapper defaults and environment variables:
+#   ATLASLM_APP_ROOT=/srv/atlaslm/staging
+#   ATLASLM_STAGING_ENV_FILE=/etc/atlaslm/staging.env
+#   ATLASLM_COMPOSE_PROJECT=atlaslm-staging
+#   ATLASLM_HEALTH_URL=https://api.staging.atlaslm.cloud/health
+# The wrapper still rejects production, unknown arguments, unapproved
+# Compose files, and non-SHA release IDs.
 
-Cmnd_Alias ATLASLM_STAGING = /usr/local/sbin/atlaslmctl staging deploy *, /usr/local/sbin/atlaslmctl staging rollback *, /usr/local/sbin/atlaslmctl staging status, /usr/local/sbin/atlaslmctl staging logs, /usr/local/sbin/atlaslmctl staging logs *, /usr/local/sbin/atlaslmctl --app-root * --env-file /etc/atlaslm/staging.env --project atlaslm-staging staging deploy *, /usr/local/sbin/atlaslmctl --app-root * --env-file /etc/atlaslm/staging.env --project atlaslm-staging staging rollback *, /usr/local/sbin/atlaslmctl --app-root * --env-file /etc/atlaslm/staging.env --project atlaslm-staging staging status, /usr/local/sbin/atlaslmctl --app-root * --env-file /etc/atlaslm/staging.env --project atlaslm-staging staging logs, /usr/local/sbin/atlaslmctl --app-root * --env-file /etc/atlaslm/staging.env --project atlaslm-staging staging logs *
-
-atlasdeploy ALL=(root) NOPASSWD: ATLASLM_STAGING
+atlasdeploy ALL=(root) NOPASSWD: /usr/local/sbin/atlaslmctl staging deploy *, /usr/local/sbin/atlaslmctl staging rollback *, /usr/local/sbin/atlaslmctl staging status, /usr/local/sbin/atlaslmctl staging logs

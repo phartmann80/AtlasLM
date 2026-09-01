@@ -304,6 +304,64 @@ class AtlaslmctlTests(unittest.TestCase):
         self.assertNotIn("abcdef", line)
         self.assertIn("<redacted>", line)
 
+    def test_frontend_is_built_and_started_on_deploy(self) -> None:
+        code, out, err = self._run([*self._common(), "staging", "deploy", SHA40])
+        self.assertEqual(code, 0, err)
+        build_lines = [line for line in out.splitlines() if line.startswith("+") and " build " in line]
+        self.assertTrue(build_lines)
+        tokens = build_lines[0].split()
+        build_at = tokens.index("build")
+        self.assertEqual(tokens[build_at + 1 : build_at + 4], ["frontend", "backend", "mastra"])
+        self.assertIn("frontend", out)
+        self.assertIn("caddy", out)
+
+    def test_unapproved_compose_files_rejected(self) -> None:
+        production_compose = str(ROOT / "docker-compose.yaml")
+        searxng = str(ROOT / "docker" / "docker-compose.searxng.yml")
+        cases = (
+            [*self._common(), "-f", production_compose, "staging", "status"],
+            [*self._common(), "--file", searxng, "staging", "status"],
+            [*self._common(), f"--file={production_compose}", "staging", "status"],
+            [*self._common(), "staging", "logs", "docker-compose.searxng"],
+        )
+        for argv in cases:
+            code, _, err = self._run(argv)
+            self.assertEqual(code, 2, argv)
+            self.assertIn("unapproved compose file", err)
+        with self.assertRaises(CTL.AtlasLMCtlError):
+            CTL.approved_compose_file(ROOT / "docker-compose.yaml")
+        approved = CTL.approved_compose_file(ROOT / "deploy" / "staging" / "docker-compose.yaml")
+        self.assertEqual(approved.name, "docker-compose.yaml")
+        previous = os.environ.get("COMPOSE_FILE")
+        os.environ["COMPOSE_FILE"] = production_compose
+        try:
+            code, _, err = self._run([*self._common(), "staging", "status"])
+        finally:
+            if previous is None:
+                os.environ.pop("COMPOSE_FILE", None)
+            else:
+                os.environ["COMPOSE_FILE"] = previous
+        self.assertEqual(code, 2)
+        self.assertIn("unapproved compose file", err)
+
+    def test_unapproved_project_rejected(self) -> None:
+        code, _, err = self._run(
+            [
+                "--dry-run",
+                "--app-root",
+                str(ROOT),
+                "--env-file",
+                str(self.env_file),
+                "--project",
+                "other-project",
+                "staging",
+                "status",
+            ]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("unapproved compose project", err)
+
+
 
 class MigrationTests(unittest.TestCase):
     def test_manifest_order_not_glob_order(self) -> None:
