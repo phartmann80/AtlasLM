@@ -1,0 +1,9 @@
+{$STAGING_FRONTEND_HOST:staging.atlaslm.cloud} {
+	encode gzip
+	reverse_proxy frontend:3000
+}
+
+{$STAGING_API_HOST:api.staging.atlaslm.cloud} {
+	encode gzip
+	reverse_proxy backend:8000
+}
