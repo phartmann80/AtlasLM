@@ -150,6 +150,18 @@ class ComposeHardeningTests(unittest.TestCase):
         frontend = "\n".join(self.services["frontend"]["raw"])
         self.assertIn("ATLAS_BACKEND_URL: http://backend:8000", frontend)
 
+    def test_database_url_interpolates_password_unescaped(self) -> None:
+        backend = "\n".join(self.services["backend"]["raw"])
+        worker = "\n".join(self.services["worker"]["raw"])
+        expected = (
+            "DATABASE_URL: postgresql://atlaslm:${DB_PASSWORD:?DB_PASSWORD must be set}"
+            "@postgres:5432/atlaslm_db"
+        )
+        self.assertIn(expected, backend)
+        self.assertIn(expected, worker)
+        self.assertNotIn("urllib.parse.quote", backend)
+        self.assertNotIn("%", expected.split("atlaslm:")[1].split("@")[0])
+
     def test_images_require_release_sha(self) -> None:
         for name in ("frontend", "backend", "worker", "mastra"):
             image = self.services[name]["image"]

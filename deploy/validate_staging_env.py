@@ -43,6 +43,7 @@ LANGDOCK_CREDENTIAL = "langdock_credential"
 GENERATED_SECRET = "generated_secret"
 
 MIN_GENERATED_CHARS = 32
+DB_PASSWORD_HEX_CHARS = 64  # openssl rand -hex 32
 HOST_RE = re.compile(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 SUPABASE_HOST_RE = re.compile(r"^https://[a-z0-9]{20}\.supabase\.co$")
 LANGDOCK_ENDPOINT_RE = re.compile(r"^https://api\.langdock\.com/openai/(eu|us)/v1$")
@@ -50,6 +51,15 @@ MODEL_RE = re.compile(r"^[A-Za-z0-9._:-]{3,64}$")
 B64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 PRINTABLE_RE = re.compile(r"^[\x21-\x7E]+$")
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+# Current Supabase API keys. Prefix checks are internal; never printed.
+SB_PUBLISHABLE_RE = re.compile(r"^sb_publishable_[A-Za-z0-9_-]{20,}$")
+SB_SECRET_RE = re.compile(r"^sb_secret_[A-Za-z0-9_-]{20,}$")
+PUBLIC_NAME_PREFIX = "NEXT_PUBLIC_"
+COMPOSE_DB_USER = "atlaslm"
+COMPOSE_DB_HOST = "postgres"
+COMPOSE_DB_PORT = 5432
+COMPOSE_DB_NAME = "atlaslm_db"
 
 
 def parse_env_file(text: str) -> dict[str, str]:
@@ -122,12 +132,75 @@ def fmt_supabase_url(value: str) -> bool:
     return SUPABASE_HOST_RE.fullmatch(value.rstrip("/")) is not None
 
 
-def fmt_anon_jwt(value: str) -> bool:
+def compose_database_url(password: str) -> str:
+    """Match deploy/staging/docker-compose.yaml interpolation (no percent-encoding)."""
+    return (
+        f"postgresql://{COMPOSE_DB_USER}:{password}"
+        f"@{COMPOSE_DB_HOST}:{COMPOSE_DB_PORT}/{COMPOSE_DB_NAME}"
+    )
+
+
+def database_url_round_trips(password: str) -> bool:
+    """True only when Compose-style interpolation still parses as that password."""
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(compose_database_url(password))
+        return (
+            parsed.scheme == "postgresql"
+            and parsed.username == COMPOSE_DB_USER
+            and parsed.password == password
+            and parsed.hostname == COMPOSE_DB_HOST
+            and parsed.port == COMPOSE_DB_PORT
+            and parsed.path == f"/{COMPOSE_DB_NAME}"
+        )
+    except ValueError:
+        return False
+
+
+def fmt_db_password(value: str) -> bool:
+    if len(value) != DB_PASSWORD_HEX_CHARS:
+        return False
+    return HEX64_RE.fullmatch(value) is not None and database_url_round_trips(value)
+
+
+def is_publishable_api_key(value: str) -> bool:
+    return SB_PUBLISHABLE_RE.fullmatch(value) is not None
+
+
+def is_secret_api_key(value: str) -> bool:
+    return SB_SECRET_RE.fullmatch(value) is not None
+
+
+def is_backend_supabase_secret(value: str) -> bool:
+    if not value:
+        return False
+    if is_secret_api_key(value):
+        return True
+    return _jwt_role(value) == "service_role"
+
+
+def fmt_anon_key(value: str) -> bool:
+    if is_backend_supabase_secret(value) or is_secret_api_key(value):
+        return False
+    if is_publishable_api_key(value):
+        return True
     return _jwt_role(value) == "anon"
 
 
-def fmt_service_jwt(value: str) -> bool:
+def fmt_service_key(value: str) -> bool:
+    if is_publishable_api_key(value) or _jwt_role(value) == "anon":
+        return False
+    if is_secret_api_key(value):
+        return True
     return _jwt_role(value) == "service_role"
+
+
+def public_names_with_backend_secret(parsed: dict[str, str]) -> bool:
+    for name, value in parsed.items():
+        if name.startswith(PUBLIC_NAME_PREFIX) and is_backend_supabase_secret(value):
+            return True
+    return False
 
 
 def fmt_langdock_endpoint(value: str) -> bool:
@@ -175,10 +248,10 @@ def fmt_seat_limit(value: str) -> bool:
 
 CATALOG: list[tuple[str, str, Callable[[str], bool] | None]] = [
     ("ATLAS_RELEASE_SHA", AUTO, fmt_release_sha),
-    ("DB_PASSWORD", GENERATED_SECRET, fmt_nonempty_secret),
+    ("DB_PASSWORD", GENERATED_SECRET, fmt_db_password),
     ("JWT_SECRET", GENERATED_SECRET, fmt_nonempty_secret),
     ("NEXT_PUBLIC_SUPABASE_URL", SUPABASE_URL, fmt_supabase_url),
-    ("NEXT_PUBLIC_SUPABASE_ANON_KEY", SUPABASE_ANON, fmt_anon_jwt),
+    ("NEXT_PUBLIC_SUPABASE_ANON_KEY", SUPABASE_ANON, fmt_anon_key),
     ("NEXT_PUBLIC_API_BASE", FIXED, fmt_exact("/api/v1")),
     ("STAGING_FRONTEND_HOST", FIXED, fmt_exact("staging.atlaslm.cloud")),
     ("STAGING_API_HOST", FIXED, fmt_exact("api.staging.atlaslm.cloud")),
@@ -187,7 +260,7 @@ CATALOG: list[tuple[str, str, Callable[[str], bool] | None]] = [
     ("ATLAS_PUBLIC_BACKEND_URL", FIXED, fmt_exact("https://api.staging.atlaslm.cloud")),
     ("ATLAS_ALLOWED_ORIGINS", FIXED, fmt_exact("https://staging.atlaslm.cloud")),
     ("ATLAS_ENV", FIXED, fmt_exact("staging")),
-    ("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_SERVICE, fmt_service_jwt),
+    ("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_SERVICE, fmt_service_key),
     ("ATLAS_INTERNAL_SIGNING_SECRET", GENERATED_SECRET, fmt_nonempty_secret),
     ("ATLAS_VAULT_KEY", GENERATED_SECRET, fmt_nonempty_secret),
     ("ATLAS_VAULT_KEY_ID", FIXED, fmt_exact("v1")),
@@ -285,6 +358,12 @@ def report(parsed: dict[str, str]) -> tuple[list[str], int]:
         failed += 1
     else:
         lines.append("GATEWAY_PAIR VALID_FORMAT")
+
+    if public_names_with_backend_secret(parsed):
+        lines.append("PUBLIC_SUPABASE_SECRET INVALID_FORMAT")
+        failed += 1
+    else:
+        lines.append("PUBLIC_SUPABASE_SECRET VALID_FORMAT")
     return lines, failed
 
 

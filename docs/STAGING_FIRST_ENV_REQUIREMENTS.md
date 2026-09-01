@@ -93,12 +93,18 @@ Perform these in the Supabase dashboard. Copy secrets only into
      is for hosted Supabase Postgres only. It is **not** `DB_PASSWORD` in
      staging.env. `DB_PASSWORD` is for the local Docker Postgres container.
    - Wait until the project is healthy.
-4. Project Settings then API:
-   - Copy `Project URL` into `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_URL`
-     (Compose maps `SUPABASE_URL` from `NEXT_PUBLIC_SUPABASE_URL`).
-   - Copy the `anon` `public` key into `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
-   - Copy the `service_role` key into `SUPABASE_SERVICE_ROLE_KEY` on the server
-     only. Never put it in frontend build args, git, or chat.
+4. Project Settings then API. Current projects show two key generations. Use one complete pair; do not mix a production project into staging.
+
+   **Current API Keys panel** (preferred when present):
+   - Copy the **Publishable** key into `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+   - Copy the **Secret** key into `SUPABASE_SERVICE_ROLE_KEY` on the server only.
+
+   **Legacy JWT panel** (still valid on older projects):
+   - Copy the `anon` `public` JWT into `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+   - Copy the `service_role` JWT into `SUPABASE_SERVICE_ROLE_KEY` on the server only.
+
+   Never put a Secret key or a `service_role` JWT into any `NEXT_PUBLIC_*` name, frontend build arg, git, or chat.
+   Copy `Project URL` into `NEXT_PUBLIC_SUPABASE_URL` (Compose maps `SUPABASE_URL` from that name).
 5. Do not enable the project as production. Do not attach production custom
    domains.
 
@@ -341,8 +347,8 @@ Do not use a live-mode signing secret on staging.
 | `ATLAS_INTERNAL_SIGNING_SECRET` | Generate securely on the server | See generation notes |
 | `ATLAS_VAULT_KEY` | Generate securely on the server | See generation notes |
 | `NEXT_PUBLIC_SUPABASE_URL` | Retrieve from Supabase | Public project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Retrieve from Supabase | `anon` `public` key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Retrieve from Supabase | `service_role` key, backend only |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Retrieve from Supabase | Publishable key from the current API Keys panel, or legacy `anon` `public` JWT |
+| `SUPABASE_SERVICE_ROLE_KEY` | Retrieve from Supabase | Secret key from the current API Keys panel, or legacy `service_role` JWT. Backend only. |
 | `LANGDOCK_API_KEY` | Retrieve from Langdock | Optional if `LANGDOCK_API_CODE` is set |
 | `LANGDOCK_API_CODE` | Retrieve from Langdock | Preferred if present |
 | `STRIPE_WEBHOOK_SECRET` | Retrieve from Stripe test mode | Optional; leave empty for first staging |
@@ -366,15 +372,22 @@ private Docker network. Do not put them in staging.env.
 Run these **on the server as root**. Do not paste the output into chat.
 
 ```sh
-openssl rand -base64 32   # DB_PASSWORD
+openssl rand -hex 32      # DB_PASSWORD only. URI-safe. 32 bytes.
 openssl rand -base64 48   # JWT_SECRET
 openssl rand -base64 48   # ATLAS_INTERNAL_SIGNING_SECRET
 openssl rand -base64 32   # ATLAS_VAULT_KEY
 ```
 
+Do not generate `DB_PASSWORD` with Base64. Compose interpolates it unescaped into
+`postgresql://atlaslm:${DB_PASSWORD}@postgres:5432/atlaslm_db`. Standard Base64
+may contain `/`, which splits userinfo and silently yields an invalid
+`DATABASE_URL`. Hex from `openssl rand -hex 32` is 64 lowercase hex characters
+and round-trips in that URI. `JWT_SECRET`, `ATLAS_INTERNAL_SIGNING_SECRET`, and
+`ATLAS_VAULT_KEY` are not embedded in that URI, so they may remain Base64.
+
 | Secret | Encoding | Minimum entropy | Later rotation |
 | --- | --- | --- | --- |
-| `DB_PASSWORD` | UTF-8; CSPRNG base64 is fine | 32 bytes | Changing it without `ALTER USER` on the existing volume breaks Postgres auth. First deploy generates once. |
+| `DB_PASSWORD` | lowercase hex, 64 characters (`openssl rand -hex 32`) | 32 bytes | Changing it without `ALTER USER` on the existing volume breaks Postgres auth. First deploy generates once. |
 | `JWT_SECRET` | UTF-8; CSPRNG base64 is fine | 32 bytes | Required to boot Settings. No session-signing use was found; Supabase JWTs are independent. Rotation should not invalidate Auth sessions today. |
 | `ATLAS_INTERNAL_SIGNING_SECRET` | UTF-8; HMAC-SHA256 key | 32 bytes | Generate even though Mastra runtimes stay legacy, because the Mastra container is started. Rotation invalidates in-flight internal requests (TTL 120 seconds). |
 | `ATLAS_VAULT_KEY` | Any UTF-8 secret; SHA-256 then urlsafe-base64 Fernet key | 32 bytes | Rotation invalidates stored connected-account refresh tokens. Google connections are not part of first acceptance. |
@@ -394,38 +407,42 @@ or missing required values. Exit `2` if the file cannot be read.
 
 The script never prints values. It also rejects:
 
-- a `service_role` JWT in `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- a `service_role` JWT or a Secret API key in `NEXT_PUBLIC_SUPABASE_ANON_KEY` or any other `NEXT_PUBLIC_*` name
+- a Publishable key or `anon` JWT in `SUPABASE_SERVICE_ROLE_KEY`
+- a `DB_PASSWORD` that is not 64 lowercase hex characters, including standard Base64
 - a production Mastra gateway URL
 - a gateway URL without a matching gateway key (or the reverse)
 - both Langdock credential names empty
 
+It accepts either current API Keys (`Publishable` + `Secret`) or legacy JWTs
+(`anon` `public` + `service_role`), including mixed pairs from the same
+non-production project.
+
 ## 7. Deployment SHA
 
-Recommend the reviewed feature commit:
+Do **not** deploy `6085582c8dc4d7dba656c3a95109365145229dd7`. That commit is the
+reviewed PR #7 tree only. It does not contain this PR's Mastra fail-closed
+change, validator, documentation, or tests. The fact that the installed
+`atlaslmctl` wrapper was copied from that SHA does not make it the application
+release SHA.
 
-`6085582c8dc4d7dba656c3a95109365145229dd7`
+The first staging **application** SHA must be a commit on `refs/heads/main` that
+contains both:
 
-Reasons:
+- the reviewed PR #7 staging hardening
+- the reviewed PR #8 configuration review (this change)
 
-- That is the independently reviewed tree, and the installed wrapper was taken
-  from it.
-- `git merge-base --is-ancestor 6085582c8dc4d7dba656c3a95109365145229dd7 origin/main`
-  is true after the PR #7 merge commit.
-- The merge commit `dc9d14ef9b467107484b0e9570c8c8d2e75a30ea` has the **same
-  tree** (`fee903fa3fd6f909996bf102601a73d533c6ff44`). Functionally identical.
-- The wrapper requires the requested SHA to be a commit reachable from
-  `refs/heads/main`. The reviewed SHA now is.
-- CI on `main` ran against the merge commit; that certifies the same tree.
-
-Do not squash. Do not deploy in this PR.
-
-When a later message authorizes deploy, the command shape is:
+That is the **merge commit** created when this PR is merged into `main` with a
+normal merge commit, not a squash. After that merge:
 
 ```sh
-sudo -n /usr/local/sbin/atlaslmctl staging deploy 6085582c8dc4d7dba656c3a95109365145229dd7
+git fetch origin main
+git rev-parse origin/main
+git merge-base --is-ancestor <reviewed-pr-8-head> origin/main
 ```
 
-That command is **not** approved by this document.
+Until that merge exists, there is no approved first-staging deploy SHA. Do not
+deploy in this PR.
 
 ## Out of scope
 
