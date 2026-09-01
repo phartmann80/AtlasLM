@@ -1,0 +1,275 @@
+name: atlaslm-staging
+
+# Isolated staging stack for the dedicated AtlasLM server.
+# Project name: atlaslm-staging
+# Staging-specific named volumes only.
+# Only Caddy publishes public host ports (80/443).
+# Optional research and extra studio services are not included.
+
+networks:
+  proxy:
+  app:
+
+volumes:
+  atlaslm_staging_pgdata:
+  atlaslm_staging_redis:
+  atlaslm_staging_audio:
+  atlaslm_staging_caddy_data:
+  atlaslm_staging_caddy_config:
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      STAGING_FRONTEND_HOST: ${STAGING_FRONTEND_HOST:-staging.atlaslm.cloud}
+      STAGING_API_HOST: ${STAGING_API_HOST:-api.staging.atlaslm.cloud}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - atlaslm_staging_caddy_data:/data
+      - atlaslm_staging_caddy_config:/config
+    networks:
+      - proxy
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null --tries=1 --timeout=3 http://127.0.0.1:80; rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 8 ]",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    image: atlaslm-staging-frontend:${ATLAS_RELEASE_SHA:?ATLAS_RELEASE_SHA must be a 40-character git SHA}
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-/api/v1}
+    restart: unless-stopped
+    environment:
+      ATLAS_BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-/api/v1}
+    expose:
+      - "3000"
+    networks:
+      - proxy
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "http://127.0.0.1:3000",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  backend:
+    image: atlaslm-staging-backend:${ATLAS_RELEASE_SHA:?ATLAS_RELEASE_SHA must be a 40-character git SHA}
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://atlaslm:${DB_PASSWORD:?DB_PASSWORD must be set}@postgres:5432/atlaslm_db
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      ATLAS_ENV: ${ATLAS_ENV:-staging}
+      ATLAS_ACTIVE_PROVIDER: ${ATLAS_ACTIVE_PROVIDER:-}
+      LANGDOCK_API_KEY: ${LANGDOCK_API_KEY:-}
+      LANGDOCK_API_CODE: ${LANGDOCK_API_CODE:-}
+      LANGDOCK_ENDPOINT_URL: ${LANGDOCK_ENDPOINT_URL:-}
+      LANGDOCK_MODEL: ${LANGDOCK_MODEL:-}
+      MODEL: ${MODEL:-}
+      BLACKBOX_API_KEY: ${BLACKBOX_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+      SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      RESEARCH_HTTP_TIMEOUT: ${RESEARCH_HTTP_TIMEOUT:-12}
+      AUDIO_DIR: /data/audio
+      ATLAS_VAULT_KEY: ${ATLAS_VAULT_KEY:-}
+      ATLAS_VAULT_KEY_ID: ${ATLAS_VAULT_KEY_ID:-v1}
+      FRONTEND_URL: ${FRONTEND_URL:-https://staging.atlaslm.cloud}
+      APP_URL: ${APP_URL:-https://staging.atlaslm.cloud}
+      ATLAS_CHAT_RUNTIME: ${ATLAS_CHAT_RUNTIME:-legacy}
+      ATLAS_REPORT_RUNTIME: ${ATLAS_REPORT_RUNTIME:-legacy}
+      ATLAS_RESEARCH_RUNTIME: ${ATLAS_RESEARCH_RUNTIME:-legacy}
+      ATLAS_MEMORY_MODE: ${ATLAS_MEMORY_MODE:-off}
+      ATLAS_TRACE_CONTENT: ${ATLAS_TRACE_CONTENT:-redacted}
+      MASTRA_INTERNAL_URL: http://mastra:8110
+      ATLAS_INTERNAL_SIGNING_SECRET: ${ATLAS_INTERNAL_SIGNING_SECRET:-}
+      ATLAS_PUBLIC_BACKEND_URL: ${ATLAS_PUBLIC_BACKEND_URL:-https://api.staging.atlaslm.cloud}
+      ATLAS_ALLOWED_ORIGINS: ${ATLAS_ALLOWED_ORIGINS:-https://staging.atlaslm.cloud}
+      ATLAS_DEFAULT_SEAT_LIMIT: ${ATLAS_DEFAULT_SEAT_LIMIT:-5}
+    expose:
+      - "8000"
+    volumes:
+      - atlaslm_staging_audio:/data/audio
+    networks:
+      - proxy
+      - app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    image: atlaslm-staging-backend:${ATLAS_RELEASE_SHA:?ATLAS_RELEASE_SHA must be a 40-character git SHA}
+    command: python -m app.worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://atlaslm:${DB_PASSWORD:?DB_PASSWORD must be set}@postgres:5432/atlaslm_db
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      ATLAS_ENV: ${ATLAS_ENV:-staging}
+      ATLAS_ACTIVE_PROVIDER: ${ATLAS_ACTIVE_PROVIDER:-}
+      LANGDOCK_API_KEY: ${LANGDOCK_API_KEY:-}
+      LANGDOCK_API_CODE: ${LANGDOCK_API_CODE:-}
+      LANGDOCK_ENDPOINT_URL: ${LANGDOCK_ENDPOINT_URL:-}
+      LANGDOCK_MODEL: ${LANGDOCK_MODEL:-}
+      MODEL: ${MODEL:-}
+      BLACKBOX_API_KEY: ${BLACKBOX_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+      SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      RESEARCH_HTTP_TIMEOUT: ${RESEARCH_HTTP_TIMEOUT:-12}
+      AUDIO_DIR: /data/audio
+      ATLAS_VAULT_KEY: ${ATLAS_VAULT_KEY:-}
+      ATLAS_VAULT_KEY_ID: ${ATLAS_VAULT_KEY_ID:-v1}
+      ATLAS_CHAT_RUNTIME: ${ATLAS_CHAT_RUNTIME:-legacy}
+      ATLAS_REPORT_RUNTIME: ${ATLAS_REPORT_RUNTIME:-legacy}
+      ATLAS_RESEARCH_RUNTIME: ${ATLAS_RESEARCH_RUNTIME:-legacy}
+      ATLAS_MEMORY_MODE: ${ATLAS_MEMORY_MODE:-off}
+      ATLAS_TRACE_CONTENT: ${ATLAS_TRACE_CONTENT:-redacted}
+      MASTRA_INTERNAL_URL: http://mastra:8110
+      ATLAS_INTERNAL_SIGNING_SECRET: ${ATLAS_INTERNAL_SIGNING_SECRET:-}
+    volumes:
+      - atlaslm_staging_audio:/data/audio
+    networks:
+      - app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os; os.kill(1, 0); from app.services.jobs import redis_healthy; raise SystemExit(0 if redis_healthy() else 1)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  mastra:
+    image: atlaslm-staging-mastra:${ATLAS_RELEASE_SHA:?ATLAS_RELEASE_SHA must be a 40-character git SHA}
+    build:
+      context: ../../mastra
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "8110"
+      ATLAS_API_URL: http://backend:8000
+      GATEWAY_API_URL: ${GATEWAY_API_URL:-}
+      GATEWAY_API_MASTRA_KEY: ${GATEWAY_API_MASTRA_KEY:-}
+      MASTRA_MODEL: ${MASTRA_MODEL:-}
+    expose:
+      - "8110"
+    networks:
+      - app
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8110/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: atlaslm
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set}
+      POSTGRES_DB: atlaslm_db
+    volumes:
+      - atlaslm_staging_pgdata:/var/lib/postgresql/data
+      - ../../docker/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlaslm -d atlaslm_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - atlaslm_staging_redis:/data
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

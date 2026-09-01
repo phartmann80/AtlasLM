@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""Root-owned AtlasLM staging control wrapper.
+
+Install later as /usr/local/sbin/atlaslmctl (root:root, mode 0750).
+This copy is for review only and is not installed by this change.
+
+Supported commands:
+  atlaslmctl staging deploy <40-character-sha>
+  atlaslmctl staging rollback <40-character-sha>
+  atlaslmctl staging status
+  atlaslmctl staging logs [service]
+
+Never prints environment-file contents. Rejects production and unknown arguments.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import Sequence
+
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SAFE_SERVICE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
+FORBIDDEN_WORDS = ("production", "prod", "live")
+PRODUCTION_HEALTH = "https://api.atlaslm.cloud/health"
+
+DEFAULT_APP_ROOT = "/srv/atlaslm"
+DEFAULT_ENV_FILE = "/etc/atlaslm/staging.env"
+DEFAULT_PROJECT = "atlaslm-staging"
+DEFAULT_STAGING_HOST = "staging.atlaslm.cloud"
+DEFAULT_API_HOST = "api.staging.atlaslm.cloud"
+DEFAULT_HEALTH_URL = "https://api.staging.atlaslm.cloud/health"
+
+COMPOSE_REL = Path("deploy/staging/docker-compose.yaml")
+MIGRATE_REL = Path("deploy/migrate.py")
+MANIFEST_REL = Path("deploy/migrations.manifest.json")
+BUILD_SERVICES = ("frontend", "backend", "mastra")
+DATA_SERVICES = ("postgres", "redis")
+APP_SERVICES = ("worker", "mastra", "frontend", "caddy")
+ROLLBACK_SERVICES = ("frontend", "backend", "worker", "mastra", "caddy")
+
+
+class AtlasLMCtlError(Exception):
+    def __init__(self, message: str, code: int = 2) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _fail(message: str, code: int = 2) -> None:
+    raise AtlasLMCtlError(message, code)
+
+
+def validate_sha(value: str) -> str:
+    sha = value.strip().lower()
+    if not SHA_RE.fullmatch(sha):
+        _fail("release id must be an exact 40-character hexadecimal Git SHA")
+    return sha
+
+
+def reject_forbidden(tokens: Sequence[str]) -> None:
+    for token in tokens:
+        lowered = token.strip().lower()
+        if lowered in FORBIDDEN_WORDS:
+            _fail(f"rejected argument: {token}")
+        if "production" in lowered or lowered.endswith("-prod"):
+            _fail(f"rejected argument: {token}")
+
+
+def _env_bool(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
+
+
+def require_file(path: Path, label: str) -> Path:
+    if not path.is_file():
+        _fail(f"{label} not found")
+    return path
+
+
+def source_root(app_root: Path) -> Path:
+    configured = os.environ.get("ATLASLM_REPO", "").strip()
+    if configured:
+        candidate = Path(configured)
+        if (candidate / COMPOSE_REL).is_file():
+            return candidate
+    nested = app_root / "repo"
+    if (nested / COMPOSE_REL).is_file():
+        return nested
+    return app_root
+
+
+def compose_command(*, env_file: Path, project: str, compose_file: Path) -> list[str]:
+    return [
+        "docker",
+        "compose",
+        "--env-file",
+        str(env_file),
+        "-p",
+        project,
+        "-f",
+        str(compose_file),
+    ]
+
+
+def build_command(compose: Sequence[str]) -> list[str]:
+    return list(compose) + ["build", *BUILD_SERVICES]
+
+
+def up_data_command(compose: Sequence[str]) -> list[str]:
+    return list(compose) + ["up", "-d", "--no-build", *DATA_SERVICES]
+
+
+def up_backend_command(compose: Sequence[str]) -> list[str]:
+    return list(compose) + ["up", "-d", "--no-build", "backend"]
+
+
+def migrate_command(compose: Sequence[str], root: Path) -> list[str]:
+    return list(compose) + [
+        "run",
+        "--rm",
+        "--no-deps",
+        "-v",
+        f"{root}:/atlaslm-src:ro",
+        "-w",
+        "/atlaslm-src",
+        "--entrypoint",
+        "python",
+        "backend",
+        "/atlaslm-src/deploy/migrate.py",
+        "--root",
+        "/atlaslm-src",
+    ]
+
+
+def up_rest_command(compose: Sequence[str]) -> list[str]:
+    return list(compose) + ["up", "-d", "--no-build", *APP_SERVICES]
+
+
+def rollback_command(compose: Sequence[str]) -> list[str]:
+    return list(compose) + [
+        "up",
+        "-d",
+        "--no-build",
+        "--pull",
+        "never",
+        *ROLLBACK_SERVICES,
+    ]
+
+
+def health_command(health_url: str) -> list[str]:
+    if PRODUCTION_HEALTH in health_url and "staging" not in health_url:
+        _fail("production health URL is not allowed")
+    return ["curl", "-fsS", "--max-time", "15", health_url]
+
+
+def sanitize_log_line(line: str) -> str:
+    redacted = re.sub(
+        r"(?i)(password|secret|token|key|authorization)=([^\s]+)",
+        r"\1=<redacted>",
+        line,
+    )
+    redacted = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "bearer <redacted>", redacted)
+    return redacted.rstrip()
+
+
+def release_env(sha: str, project: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["ATLAS_RELEASE_SHA"] = sha
+    env["COMPOSE_PROJECT_NAME"] = project
+    return env
+
+
+def _run(
+    cmd: Sequence[str],
+    *,
+    dry_run: bool,
+    env: dict[str, str] | None = None,
+    capture: bool = False,
+) -> str:
+    printable = " ".join(shlex.quote(part) for part in cmd)
+    if dry_run:
+        print(f"+ {printable}")
+        return ""
+    try:
+        completed = subprocess.run(
+            list(cmd),
+            check=True,
+            text=True,
+            env=env,
+            capture_output=capture,
+        )
+    except FileNotFoundError:
+        _fail(f"command not found: {cmd[0]}")
+    except subprocess.CalledProcessError as exc:
+        _fail(f"command failed with exit {exc.returncode}: {cmd[0]}", code=exc.returncode or 1)
+    return completed.stdout if capture else ""
+
+
+def cmd_deploy(args: argparse.Namespace) -> None:
+    sha = validate_sha(args.sha)
+    root = source_root(Path(args.app_root))
+    env_file = Path(args.env_file)
+    project = args.project
+    dry_run = args.dry_run
+    require_file(env_file, "environment file")
+    compose_file = require_file(root / COMPOSE_REL, "compose file")
+    require_file(root / MIGRATE_REL, "migration runner")
+    require_file(root / MANIFEST_REL, "migration manifest")
+
+    env = release_env(sha, project)
+    compose = compose_command(env_file=env_file, project=project, compose_file=compose_file)
+    _run(build_command(compose), dry_run=dry_run, env=env)
+    _run(up_data_command(compose), dry_run=dry_run, env=env)
+    _run(up_backend_command(compose), dry_run=dry_run, env=env)
+    _run(migrate_command(compose, root), dry_run=dry_run, env=env)
+    _run(up_rest_command(compose), dry_run=dry_run, env=env)
+    _run(health_command(args.health_url), dry_run=dry_run)
+    print(f"staging deploy complete for {sha}")
+
+
+def cmd_rollback(args: argparse.Namespace) -> None:
+    sha = validate_sha(args.sha)
+    root = source_root(Path(args.app_root))
+    env_file = Path(args.env_file)
+    project = args.project
+    dry_run = args.dry_run
+    require_file(env_file, "environment file")
+    compose_file = require_file(root / COMPOSE_REL, "compose file")
+    env = release_env(sha, project)
+    compose = compose_command(env_file=env_file, project=project, compose_file=compose_file)
+    cmd = rollback_command(compose)
+    if "build" in cmd[cmd.index("up") :]:
+        _fail("rollback refused to rebuild")
+    _run(cmd, dry_run=dry_run, env=env)
+    print(f"staging rollback selected immutable tags for {sha}")
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    root = source_root(Path(args.app_root))
+    env_file = require_file(Path(args.env_file), "environment file")
+    compose = compose_command(
+        env_file=env_file,
+        project=args.project,
+        compose_file=require_file(root / COMPOSE_REL, "compose file"),
+    )
+    _run(compose + ["ps"], dry_run=args.dry_run)
+
+
+def cmd_logs(args: argparse.Namespace) -> None:
+    service = args.service
+    if service and not SAFE_SERVICE_RE.fullmatch(service):
+        _fail("invalid service name")
+    root = source_root(Path(args.app_root))
+    env_file = require_file(Path(args.env_file), "environment file")
+    compose = compose_command(
+        env_file=env_file,
+        project=args.project,
+        compose_file=require_file(root / COMPOSE_REL, "compose file"),
+    )
+    cmd = compose + ["logs", "--no-color", "--tail", "200"]
+    if service:
+        cmd.append(service)
+    if args.dry_run:
+        _run(cmd, dry_run=True)
+        return
+    try:
+        completed = subprocess.run(cmd, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        _fail("log collection failed", code=exc.returncode or 1)
+    for line in completed.stdout.splitlines():
+        print(sanitize_log_line(line))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="atlaslmctl",
+        description="AtlasLM staging control wrapper. Production commands are rejected.",
+    )
+    parser.add_argument(
+        "--app-root",
+        default=os.environ.get("ATLASLM_APP_ROOT", DEFAULT_APP_ROOT),
+        help="Application root containing deploy/staging (default: /srv/atlaslm or ATLASLM_APP_ROOT)",
+    )
+    parser.add_argument(
+        "--env-file",
+        default=os.environ.get("ATLASLM_STAGING_ENV_FILE", DEFAULT_ENV_FILE),
+        help="Staging environment file path",
+    )
+    parser.add_argument(
+        "--project",
+        default=os.environ.get("ATLASLM_COMPOSE_PROJECT", DEFAULT_PROJECT),
+        help="Compose project name",
+    )
+    parser.add_argument(
+        "--staging-host",
+        default=os.environ.get("ATLASLM_STAGING_HOST", DEFAULT_STAGING_HOST),
+    )
+    parser.add_argument(
+        "--api-host",
+        default=os.environ.get("ATLASLM_API_HOST", DEFAULT_API_HOST),
+    )
+    parser.add_argument(
+        "--health-url",
+        default=os.environ.get("ATLASLM_HEALTH_URL", DEFAULT_HEALTH_URL),
+        help="Staging health URL",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=_env_bool("ATLASLMCTL_DRY_RUN"),
+        help="Print commands without executing them",
+    )
+    targets = parser.add_subparsers(dest="target", required=True)
+    staging = targets.add_parser("staging")
+    actions = staging.add_subparsers(dest="action", required=True)
+    deploy = actions.add_parser("deploy")
+    deploy.add_argument("sha")
+    rollback = actions.add_parser("rollback")
+    rollback.add_argument("sha")
+    actions.add_parser("status")
+    logs = actions.add_parser("logs")
+    logs.add_argument("service", nargs="?")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        reject_forbidden(argv)
+        parser = build_parser()
+        try:
+            args = parser.parse_args(argv)
+        except SystemExit as exc:
+            return int(exc.code or 2)
+
+        if args.target != "staging":
+            print("error: only the staging target is supported", file=sys.stderr)
+            return 2
+        if PRODUCTION_HEALTH in args.health_url and "staging" not in args.health_url:
+            print("error: production health URL is not allowed", file=sys.stderr)
+            return 2
+
+        if args.action == "deploy":
+            cmd_deploy(args)
+        elif args.action == "rollback":
+            cmd_rollback(args)
+        elif args.action == "status":
+            cmd_status(args)
+        elif args.action == "logs":
+            cmd_logs(args)
+        else:
+            _fail(f"unknown action: {args.action}")
+    except AtlasLMCtlError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return exc.code
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

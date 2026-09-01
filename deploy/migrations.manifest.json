@@ -1,0 +1,58 @@
+{
+  "description": "Deterministic AtlasLM SQL apply order. IDs are unique; filename numbers are not used for ordering.",
+  "schema_table": "atlaslm_schema_migrations",
+  "migrations": [
+    {
+      "id": "000_enable_vector",
+      "path": "docker/init/001_enable_vector.sql"
+    },
+    {
+      "id": "001_embedding_model_and_diagnostics",
+      "path": "migrations/001_embedding_model_and_diagnostics.sql"
+    },
+    {
+      "id": "002a_document_status",
+      "path": "migrations/002_document_status.sql"
+    },
+    {
+      "id": "002b_studio_outputs",
+      "path": "migrations/002_studio_outputs.sql"
+    },
+    {
+      "id": "003_deep_research_columns",
+      "path": "migrations/003_deep_research.sql"
+    },
+    {
+      "id": "004a_canvas_and_flags",
+      "path": "migrations/004_patch_006_canvas_and_flags.sql"
+    },
+    {
+      "id": "004b_audio_overviews",
+      "path": "migrations/004_audio_overviews.sql"
+    },
+    {
+      "id": "005_workspace_connections",
+      "path": "migrations/005_workspace_connections.sql"
+    },
+    {
+      "id": "006_drive_watch_channels",
+      "path": "migrations/006_drive_watch_channels.sql"
+    },
+    {
+      "id": "007a_synthesis_and_sources",
+      "path": "migrations/patch_007_synthesis_and_sources.sql"
+    },
+    {
+      "id": "007b_team_membership",
+      "path": "migrations/007_team_membership.sql"
+    },
+    {
+      "id": "009_studio_outputs_patch",
+      "path": "migrations/patch_009_studio_outputs.sql"
+    },
+    {
+      "id": "010_ai_runtime_vertical_slice",
+      "path": "migrations/010_ai_runtime_vertical_slice.sql"
+    }
+  ]
+}
