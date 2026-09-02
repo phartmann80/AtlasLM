@@ -336,6 +336,28 @@ class TrustBoundaryTests(unittest.TestCase):
         self.assertNotIn("\n", message)
         self.assertTrue(message.split(" :: ", 1)[1].strip())
 
+    def test_non_git_failure_stays_opaque(self) -> None:
+        self.cfg.dry_run = False
+        error = subprocess.CalledProcessError(
+            1,
+            [self.cfg.docker_bin],
+            stderr=f"line 2: unexpected character in {CANARY}\n",
+        )
+        compose = [
+            self.cfg.docker_bin,
+            "compose",
+            "--env-file",
+            str(self.cfg.env_file),
+            "ps",
+        ]
+        with patch.object(CTL.subprocess, "run", side_effect=error):
+            with self.assertRaises(CTL.AtlasLMCtlError) as raised:
+                CTL._run(compose, cfg=self.cfg, git=False)
+        message = str(raised.exception)
+        self.assertNotIn(CANARY, message)
+        self.assertNotIn(" :: ", message)
+        self.assertIn("command failed with exit 1:", message)
+
     def test_failure_redacts_token_and_gladia_key(self) -> None:
         error = subprocess.CalledProcessError(
             1,

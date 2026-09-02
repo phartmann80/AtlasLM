@@ -292,9 +292,11 @@ def _run(
     except FileNotFoundError:
         _fail(f"command not found: {cmd[0]}")
     except subprocess.CalledProcessError as exc:
-        lines = [sanitize_log_line(l) for l in (exc.stderr or "").strip().splitlines() if l.strip()]
-        tail = " | ".join(lines[-3:])[:400]
-        detail = f" :: {tail}" if tail else ""
+        detail = ""
+        if git:
+            lines = [sanitize_log_line(l) for l in (exc.stderr or "").strip().splitlines() if l.strip()]
+            tail = " | ".join(lines[-3:])[:400]
+            detail = f" :: {tail}" if tail else ""
         _fail(f"command failed with exit {exc.returncode}: {cmd[0]}{detail}", code=exc.returncode or 1)
     if capture:
         return completed.stdout.strip()
