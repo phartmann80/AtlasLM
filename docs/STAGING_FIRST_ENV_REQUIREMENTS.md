@@ -343,7 +343,7 @@ Do not use a live-mode signing secret on staging.
 | `RESEARCH_HTTP_TIMEOUT` | Fixed non-secret staging value | `12` |
 | `ATLAS_DEFAULT_SEAT_LIMIT` | Fixed non-secret staging value | `5` |
 | `GLADIA_API_KEY` | Retrieve from Gladia (EU, name `atlaslm-staging`) | Optional until media ingest is enabled; leave empty in the example |
-| `GLADIA_BASE_URL` | Fixed non-secret staging value | `https://api.gladia.io` |
+| `GLADIA_BASE_URL` | Fixed non-secret staging value | `https://api.gladia.io` (no `/v2`; the client appends `/v2/upload` and `/v2/pre-recorded`) |
 | `GLADIA_CALLBACK_BASE` | Fixed non-secret staging value | `https://api.staging.atlaslm.cloud` |
 | `ATLAS_MEDIA_MAX_MB` | Fixed non-secret staging value | `2048` |
 | `ATLAS_MEDIA_MAX_SECONDS` | Fixed non-secret staging value | `10800` |

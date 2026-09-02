@@ -61,7 +61,7 @@ does not invent a citation.
 Filled on the server. Empty placeholders live in `deploy/staging/env.example`.
 
 - `GLADIA_API_KEY`
-- `GLADIA_BASE_URL=https://api.gladia.io`
+- `GLADIA_BASE_URL=https://api.gladia.io` (no `/v2`; client appends `/v2/upload` and `/v2/pre-recorded`)
 - `GLADIA_CALLBACK_BASE=https://api.staging.atlaslm.cloud`
 - `ATLAS_MEDIA_MAX_MB=2048`
 - `ATLAS_MEDIA_MAX_SECONDS=10800`
