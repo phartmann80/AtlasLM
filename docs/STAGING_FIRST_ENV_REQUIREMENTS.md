@@ -21,7 +21,7 @@ Production and mobile remain blocked.
 
 - AI provider: Langdock
 - Stripe: test mode, webhooks not required for the first acceptance suite
-- Dedicated non-production Supabase project: required; current status unknown
+- Dedicated non-production Supabase project: confirmed and configured
 - Non-production Mastra gateway: not required for the first acceptance suite
 
 ## 1. Supabase
@@ -56,9 +56,9 @@ the **local staging PostgreSQL container**, not hosted Supabase.
 
 ### Documented staging project identifier
 
-No dedicated staging project URL is documented in `deploy/staging/env.example`
-or `docs/ENVIRONMENT_INVENTORY.md`. Those files leave `NEXT_PUBLIC_SUPABASE_URL`
-empty.
+The dedicated non-production Supabase project is **confirmed and configured**
+on the server in `/etc/atlaslm/staging.env`. The URL and keys stay out of git.
+`deploy/staging/env.example` still leaves `NEXT_PUBLIC_SUPABASE_URL` empty.
 
 ### Non-secret metadata already in this repository
 
@@ -66,11 +66,9 @@ A public Supabase hostname appears as a **fallback default** in
 `run_api_verification.py` and as a localStorage key prefix in screenshot helper
 scripts: `https://ortmzzdfkwidvuolczqa.supabase.co`.
 
-That host is public project metadata, not a secret. It is **not** labeled as a
-dedicated non-production staging project. Do not assume it is safe to reuse for
-`staging.atlaslm.cloud`. Paul should identify it in the Supabase dashboard by
-the public URL only, then create or select a **dedicated** non-production
-project for staging.
+That host is public project metadata, not a secret. Do not assume it is the
+staging project. The dedicated non-production project for
+`staging.atlaslm.cloud` is configured only on the server.
 
 Do not paste the service role key, database password, or JWT secret from any
 existing project into chat.
