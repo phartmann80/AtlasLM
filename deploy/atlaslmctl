@@ -49,6 +49,10 @@ ALLOWED_GIT_REMOTES = frozenset(
     }
 )
 
+# GitHub rejects git's HTTP/2 upload-pack POST from the staging host (Sep 2026).
+# HTTP/1.1 is deterministic. protocol.version stays default (v2).
+GIT_TRANSPORT_OPTS: tuple[str, ...] = ("-c", "http.version=HTTP/1.1")
+
 COMPOSE_REL = Path("deploy/staging/docker-compose.yaml")
 CADDY_REL = Path("deploy/staging/Caddyfile")
 MIGRATE_REL = Path("deploy/migrate.py")
@@ -247,6 +251,21 @@ def maybe_reexec_isolated(argv: Sequence[str]) -> None:
     os.execve(sys.executable, [sys.executable, "-I", script, *argv], env)
 
 
+def sanitize_log_line(line: str) -> str:
+    redacted = re.sub(
+        r"(?i)(password|secret|token|key|authorization)=([^\s]+)",
+        r"\1=<redacted>",
+        line,
+    )
+    redacted = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "bearer <redacted>", redacted)
+    redacted = re.sub(
+        r"(?i)(x-gladia-key|x-api-key)\s*[:=]\s*\S+",
+        r"\1=<redacted>",
+        redacted,
+    )
+    return redacted.rstrip()
+
+
 def _run(
     cmd: Sequence[str],
     *,
@@ -273,7 +292,10 @@ def _run(
     except FileNotFoundError:
         _fail(f"command not found: {cmd[0]}")
     except subprocess.CalledProcessError as exc:
-        _fail(f"command failed with exit {exc.returncode}: {cmd[0]}", code=exc.returncode or 1)
+        lines = [sanitize_log_line(l) for l in (exc.stderr or "").strip().splitlines() if l.strip()]
+        tail = " | ".join(lines[-3:])[:400]
+        detail = f" :: {tail}" if tail else ""
+        _fail(f"command failed with exit {exc.returncode}: {cmd[0]}{detail}", code=exc.returncode or 1)
     if capture:
         return completed.stdout.strip()
     return completed.stdout or ""
@@ -281,7 +303,7 @@ def _run(
 
 def git_cmd(cfg: TrustedConfig, args: Sequence[str], *, cwd: Path | None = None, capture: bool = True) -> str:
     git = cfg.git_bin if Path(cfg.git_bin).is_file() else "git"
-    return _run([git, *args], cfg=cfg, cwd=cwd, git=True, capture=capture)
+    return _run([git, *GIT_TRANSPORT_OPTS, *args], cfg=cfg, cwd=cwd, git=True, capture=capture)
 
 
 def path_is_within(root: Path, candidate: Path) -> bool:
@@ -561,16 +583,6 @@ def cmd_status() -> None:
     release = active_release(cfg)
     compose = compose_command(release, cfg)
     _run(compose + ["ps"], cfg=cfg, extra_env={"ATLAS_RELEASE_SHA": release.name})
-
-
-def sanitize_log_line(line: str) -> str:
-    redacted = re.sub(
-        r"(?i)(password|secret|token|key|authorization)=([^\s]+)",
-        r"\1=<redacted>",
-        line,
-    )
-    redacted = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "bearer <redacted>", redacted)
-    return redacted.rstrip()
 
 
 def cmd_logs() -> None:

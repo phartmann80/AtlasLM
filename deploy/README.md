@@ -56,6 +56,11 @@ install -o root -g root -m 0440 deploy/sudoers.atlaslm.example /etc/sudoers.d/at
 visudo -cf /etc/sudoers.d/atlaslm-staging
 ```
 
+The installed wrapper does not update itself. Any change to `deploy/atlaslmctl`
+requires root to reinstall it from the verified release before deploying (see
+the reinstall procedure). Git clones force `http.version=HTTP/1.1` because
+GitHub rejects git's HTTP/2 upload-pack POST from the staging host.
+
 ### Exact sudoers rule
 
 ```

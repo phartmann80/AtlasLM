@@ -249,9 +249,14 @@ class AtlaslmctlCliTests(unittest.TestCase):
             self.assertTrue("unapproved compose file" in err or "unknown argument" in err, err)
 
     def test_sanitize_log_line(self) -> None:
-        line = CTL.sanitize_log_line("Authorization=secret-token JWT_SECRET=abc bearer abcdef")
+        line = CTL.sanitize_log_line(
+            "Authorization=secret-token JWT_SECRET=abc bearer abcdef "
+            "x-gladia-key: zzz x-api-key: yyy"
+        )
         self.assertNotIn("secret-token", line)
         self.assertNotIn("abcdef", line)
+        self.assertNotIn("zzz", line)
+        self.assertNotIn("yyy", line)
         self.assertIn("<redacted>", line)
 
     def test_ctl_source_never_reads_env_file(self) -> None:
