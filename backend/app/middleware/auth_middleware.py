@@ -15,6 +15,7 @@ PUBLIC_PATHS = [
     "/auth/",
     "/auth/callback",
     "/stripe/webhook",
+    "/api/v1/internal/media/stt-callback",
 ]
 
 class AuthMiddleware(BaseHTTPMiddleware):

@@ -11,12 +11,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     gcc \
     tesseract-ocr \
+    tesseract-ocr-eng \
     espeak-ng \
     ffmpeg \
+    chromium \
+    fonts-liberation \
+    fonts-dejavu-core \
+    fontconfig \
+    wget \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Kokoro-82M ONNX weights for CPU TTS in the worker. No GPU.
+RUN mkdir -p /voices \
+    && wget -q -O /voices/kokoro-v1.0.onnx \
+      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx \
+    && wget -q -O /voices/voices-v1.0.bin \
+      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
 
 COPY . .
 

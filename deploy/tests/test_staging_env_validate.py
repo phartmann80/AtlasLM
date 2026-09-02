@@ -92,6 +92,19 @@ def valid_env(**overrides: str) -> str:
         "ATLAS_TRACE_CONTENT": "redacted",
         "RESEARCH_HTTP_TIMEOUT": "12",
         "ATLAS_DEFAULT_SEAT_LIMIT": "5",
+        "GLADIA_API_KEY": "",
+        "GLADIA_BASE_URL": "https://api.gladia.io",
+        "GLADIA_CALLBACK_BASE": "https://api.staging.atlaslm.cloud",
+        "ATLAS_MEDIA_MAX_MB": "2048",
+        "ATLAS_MEDIA_MAX_SECONDS": "10800",
+        "ATLAS_YTDLP_COOKIES": "",
+        "ATLAS_MEDIA_CONCURRENT_JOBS": "2",
+        "ATLAS_MEDIA_DIR": "/data/media",
+        "ATLAS_KOKORO_MODEL": "/voices/kokoro-v1.0.onnx",
+        "ATLAS_KOKORO_VOICES": "/voices/voices-v1.0.bin",
+        "ATLAS_TTS_VOICE_A": "af_heart",
+        "ATLAS_TTS_VOICE_B": "am_michael",
+        "ATLAS_CHROMIUM_BIN": "",
     }
     rows.update(overrides)
     return "\n".join(f"{key}={value}" for key, value in rows.items()) + "\n"

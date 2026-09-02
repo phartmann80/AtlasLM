@@ -5,5 +5,14 @@
 
 {$STAGING_API_HOST:api.staging.atlaslm.cloud} {
 	encode gzip
-	reverse_proxy backend:8000
+	request_body {
+		max_size 2GB
+	}
+	reverse_proxy backend:8000 {
+		transport http {
+			read_timeout 1h
+			write_timeout 1h
+			dial_timeout 10s
+		}
+	}
 }

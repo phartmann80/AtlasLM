@@ -48,8 +48,8 @@ export default function AddSourceModal({
     return msg || "AtlasLM could not ingest this source.";
   }
 
-  function handleFileClick(type: "pdf" | "docx" | "xlsx" | "pptx" | "audio" | "image") {
-    setSelectedFileType(type);
+  function handleFileClick(type: "pdf" | "docx" | "xlsx" | "pptx" | "audio" | "image" | "video") {
+    setSelectedFileType(type === "video" ? "audio" : type);
     if (type === "pdf") {
       setAcceptTypes(".pdf");
     } else if (type === "docx") {
@@ -60,8 +60,10 @@ export default function AddSourceModal({
       setAcceptTypes(".pptx");
     } else if (type === "audio") {
       setAcceptTypes(".mp3,.wav,.m4a,.aac,.ogg,.flac");
+    } else if (type === "video") {
+      setAcceptTypes(".mp4,.mov,.webm,.mkv");
     } else if (type === "image") {
-      setAcceptTypes(".png,.jpg,.jpeg,.webp");
+      setAcceptTypes(".png,.jpg,.jpeg,.webp,.heic,.heif");
     }
     setErr(null);
     setTimeout(() => {
@@ -77,7 +79,7 @@ export default function AddSourceModal({
     try {
       const fd = new FormData();
       fd.append("file", file);
-      if (selectedFileType === "audio") {
+      if (selectedFileType === "audio" || acceptTypes.includes(".mp4")) {
         fd.append("language", transcriptionLanguage);
       }
       const res = await apiClient.postForm<unknown>(`/api/v1/workspaces/${notebookId}/documents`, fd);
@@ -374,6 +376,19 @@ export default function AddSourceModal({
                   </div>
                 </button>
 
+                <button className="src-row" onClick={() => handleFileClick("video")}>
+                  <div className="src-ic">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#7c6bb5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="4" width="20" height="16" rx="2" />
+                      <path d="M10 9l6 3-6 3V9z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="sr-name">Video</div>
+                    <div className="sr-desc">MP4, MOV, WEBM, MKV transcription</div>
+                  </div>
+                </button>
+
                 <button className="src-row" onClick={() => handleFileClick("image")}>
                   <div className="src-ic">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fb923c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -384,7 +399,7 @@ export default function AddSourceModal({
                   </div>
                   <div>
                     <div className="sr-name">Image</div>
-                    <div className="sr-desc">PNG, JPG, WEBP with OCR</div>
+                    <div className="sr-desc">PNG, JPG, WEBP, HEIC with OCR</div>
                   </div>
                 </button>
               </div>

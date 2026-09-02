@@ -1,0 +1,18 @@
+{
+  "id": "rec-fixture-1",
+  "status": "done",
+  "result": {
+    "metadata": {
+      "audio_duration": 180.4
+    },
+    "transcription": {
+      "full_transcript": "Hello from speaker one. Then speaker two replies.",
+      "utterances": [
+        {"speaker": 0, "start": 0.0, "end": 42.0, "text": "Welcome to the briefing on quarterly results."},
+        {"speaker": 1, "start": 42.5, "end": 88.0, "text": "Revenue was 12 million, up from 9 million last year."},
+        {"speaker": 0, "start": 88.5, "end": 130.0, "text": "The chart on slide three shows the same values."},
+        {"speaker": 1, "start": 130.5, "end": 180.0, "text": "We should cite the original recording at these timestamps."}
+      ]
+    }
+  }
+}

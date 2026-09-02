@@ -124,6 +124,7 @@ def redis_healthy() -> bool:
 
 
 STUDIO_QUEUE_KEY = "atlaslm:studio:queue"
+MEDIA_QUEUE_KEY = "atlaslm:media:queue"
 
 
 def enqueue_studio_job(
@@ -156,4 +157,18 @@ def pop_studio_job(timeout: int = 5):
     if item is None:
         return None
     return json.loads(item[1].decode("utf-8"))
+
+
+def enqueue_media_job(job_id: uuid.UUID) -> None:
+    r = get_redis()
+    r.lpush(MEDIA_QUEUE_KEY, str(job_id).encode("utf-8"))
+    logger.info("Enqueued media job %s", job_id)
+
+
+def pop_media_wakeup(timeout: int = 2) -> Optional[str]:
+    r = get_redis()
+    item = r.brpop(MEDIA_QUEUE_KEY, timeout=timeout)
+    if item is None:
+        return None
+    return item[1].decode("utf-8")
 
