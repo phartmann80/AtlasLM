@@ -181,6 +181,14 @@ class ComposeHardeningTests(unittest.TestCase):
         self.assertIn("reverse_proxy frontend:3000", caddy)
         self.assertIn("reverse_proxy backend:8000", caddy)
 
+    def test_backend_dockerfile_pins_kokoro_sha256(self) -> None:
+        text = (ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("sha256sum -c", text)
+        self.assertIn("KOKORO_MODEL_SHA256=", text)
+        self.assertIn("KOKORO_VOICES_SHA256=", text)
+        self.assertRegex(text, r"KOKORO_MODEL_SHA256=[0-9a-f]{64}")
+        self.assertRegex(text, r"KOKORO_VOICES_SHA256=[0-9a-f]{64}")
+
     def test_frontend_dockerfile_build_args_are_public_only(self) -> None:
         text = FRONTEND_DOCKERFILE.read_text(encoding="utf-8")
         self.assertIn("ARG NEXT_PUBLIC_SUPABASE_URL", text)
