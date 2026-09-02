@@ -55,6 +55,12 @@ class FakeDoc:
         self.error_message = kwargs.get("error_message", "previous fetch failed")
         self.idempotency_key = kwargs.get("idempotency_key")
         self.created_at = kwargs.get("created_at", datetime.now(timezone.utc))
+        self.storage_path = None
+        self.thumbnail_path = None
+        self.media_duration_ms = None
+        self.youtube_video_id = kwargs.get("youtube_video_id")
+        self.channel_name = None
+        self.extra_metadata = None
 
 
 class FakeWorkspace:
@@ -139,38 +145,26 @@ class UrlYoutubeIngestRouteTests(unittest.TestCase):
         self.assertNotIn("language", kwargs["source_url"])
 
     def test_youtube_ingest_includes_language_and_does_not_use_text_route(self) -> None:
+        doc = FakeDoc(
+            file_type="youtube",
+            source_url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
+            status="processing",
+            error_message=None,
+            youtube_video_id="jNQXAC9IVRw",
+        )
         with patch("app.api.endpoints._get_owned_workspace", return_value=FakeWorkspace()), \
              patch("app.api.endpoints._existing_idempotent_document", return_value=None), \
-             patch(
-                 "app.api.endpoints._youtube_ingest_payload",
-                 new_callable=AsyncMock,
-                 return_value={
-                     "filename": "Talk (YouTube)",
-                     "file_bytes": b"# transcript",
-                     "canonical_url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
-                     "language": "de",
-                 },
-             ), \
-             patch("app.api.endpoints.redis_healthy", return_value=True), \
-             patch("app.api.endpoints.enqueue_ingestion_job") as enqueue, \
-             patch("app.api.endpoints.DocumentPipeline") as pipeline_cls:
-            pipeline_cls.return_value.create_pending_document.return_value = FakeDoc(
-                file_type="youtube",
-                source_url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
-                status="processing",
-                error_message=None,
-            )
+             patch("app.services.media.ingest_api.start_youtube_document", return_value=doc) as start:
             response = self.client.post(
                 f"/api/v1/workspaces/{WORKSPACE_ID}/documents/youtube",
                 json={"url": "https://youtu.be/jNQXAC9IVRw", "language": "de"},
                 headers=self._headers(idem="yt-1"),
             )
         self.assertEqual(response.status_code, 202)
-        self.assertEqual(enqueue.call_args.kwargs["language"], "de")
-        self.assertEqual(
-            enqueue.call_args.kwargs["source_url"],
-            "https://www.youtube.com/watch?v=jNQXAC9IVRw",
-        )
+        kwargs = start.call_args.kwargs
+        self.assertEqual(kwargs["url"], "https://youtu.be/jNQXAC9IVRw")
+        self.assertEqual(kwargs["language"], "de")
+        self.assertNotIn("/documents/text", str(start.call_args))
 
     def test_idempotent_replay_returns_existing_document(self) -> None:
         existing = FakeDoc(status="ready", error_message=None)

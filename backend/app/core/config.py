@@ -78,6 +78,22 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = Field(default="", env="STRIPE_WEBHOOK_SECRET")
     SUPABASE_SERVICE_ROLE_KEY: str = Field(default="", env="SUPABASE_SERVICE_ROLE_KEY")
 
+    # Media ingestion (images, audio, video, YouTube) and Studio generation
+    GLADIA_API_KEY: str = Field(default="", env="GLADIA_API_KEY")
+    GLADIA_BASE_URL: str = Field(default="https://api.gladia.io", env="GLADIA_BASE_URL")
+    GLADIA_CALLBACK_BASE: str = Field(default="", env="GLADIA_CALLBACK_BASE")
+    ATLAS_MEDIA_MAX_MB: int = Field(default=2048, env="ATLAS_MEDIA_MAX_MB")
+    ATLAS_MEDIA_MAX_SECONDS: int = Field(default=10800, env="ATLAS_MEDIA_MAX_SECONDS")
+    ATLAS_IMAGE_MAX_MB: int = Field(default=20, env="ATLAS_IMAGE_MAX_MB")
+    ATLAS_YTDLP_COOKIES: str = Field(default="", env="ATLAS_YTDLP_COOKIES")
+    ATLAS_MEDIA_CONCURRENT_JOBS: int = Field(default=2, env="ATLAS_MEDIA_CONCURRENT_JOBS")
+    ATLAS_MEDIA_DIR: str = Field(default="/data/media", env="ATLAS_MEDIA_DIR")
+    ATLAS_KOKORO_MODEL: str = Field(default="/voices/kokoro-v1.0.onnx", env="ATLAS_KOKORO_MODEL")
+    ATLAS_KOKORO_VOICES: str = Field(default="/voices/voices-v1.0.bin", env="ATLAS_KOKORO_VOICES")
+    ATLAS_TTS_VOICE_A: str = Field(default="af_heart", env="ATLAS_TTS_VOICE_A")
+    ATLAS_TTS_VOICE_B: str = Field(default="am_michael", env="ATLAS_TTS_VOICE_B")
+    ATLAS_CHROMIUM_BIN: str = Field(default="", env="ATLAS_CHROMIUM_BIN")
+
     class Config:
         case_sensitive = True
         env_file = None if os.getenv("VERCEL") else ".env"

@@ -116,7 +116,9 @@ class RAGService:
             SELECT dc.id, dc.content, dc.page_number, dc.chunk_index,
                    d.id AS document_id, d.filename,
                    (dc.embedding <=> :query_vector) AS distance,
-                   dc.sheet, dc.timestamp, d.source_url, d.file_type
+                   dc.sheet, dc.timestamp, d.source_url, d.file_type,
+                   dc.speaker, dc.start_ms, dc.end_ms, dc.region,
+                   dc.video_id, dc.source_kind, d.youtube_video_id
             FROM document_chunks dc
             JOIN documents d ON dc.document_id = d.id
             WHERE d.workspace_id = :workspace_id
@@ -154,6 +156,13 @@ class RAGService:
                     "timestamp": row[8],
                     "source_url": row[9],
                     "file_type": row[10],
+                    "speaker": row[11],
+                    "start_ms": row[12],
+                    "end_ms": row[13],
+                    "region": row[14],
+                    "video_id": row[15],
+                    "source_kind": row[16],
+                    "youtube_video_id": row[17],
                 }
             )
         return matched_chunks
@@ -172,6 +181,15 @@ class RAGService:
 
         for idx, chunk in enumerate(chunks):
             tag = f"source_{idx + 1}"
+            video_id = chunk.get("video_id") or chunk.get("youtube_video_id")
+            start_s = None
+            if chunk.get("start_ms") is not None:
+                start_s = int(chunk["start_ms"]) // 1000
+            elif chunk.get("timestamp") is not None:
+                start_s = int(chunk["timestamp"])
+            source_url = chunk.get("source_url")
+            if video_id and start_s is not None:
+                source_url = f"https://www.youtube.com/watch?v={video_id}&t={start_s}"
             source_mapping[tag] = {
                 "tag": tag,
                 "chunk_id": str(chunk["chunk_id"]),
@@ -181,12 +199,26 @@ class RAGService:
                 "content": chunk["content"],
                 "sheet": chunk.get("sheet"),
                 "timestamp": chunk.get("timestamp"),
-                "source_url": chunk.get("source_url"),
+                "source_url": source_url,
                 "file_type": chunk.get("file_type"),
+                "speaker": chunk.get("speaker"),
+                "start_ms": chunk.get("start_ms"),
+                "end_ms": chunk.get("end_ms"),
+                "region": chunk.get("region") or ("full" if chunk.get("file_type") == "image" else None),
+                "video_id": video_id,
+                "source_kind": chunk.get("source_kind"),
             }
+            loc = f"File: {chunk['filename']}"
+            if chunk.get("speaker"):
+                loc += f", Speaker: {chunk['speaker']}"
+            if start_s is not None:
+                loc += f", t={start_s}s"
+            elif chunk.get("region"):
+                loc += f", region={chunk['region']}"
+            elif chunk.get("page_number"):
+                loc += f", Page: {chunk['page_number']}"
             context_blocks.append(
-                f"--- START SOURCE {tag} "
-                f"(File: {chunk['filename']}, Page: {chunk['page_number']}) ---\n"
+                f"--- START SOURCE {tag} ({loc}) ---\n"
                 f"{chunk['content']}\n"
                 f"--- END SOURCE {tag} ---"
             )
@@ -491,7 +523,8 @@ def retrieve_chunks(notebook_id: str, query: str, source_ids: List[str], k: int)
             f"""
             SELECT dc.id, dc.content, dc.page_number, dc.chunk_index,
                    d.id AS document_id, d.filename,
-                   dc.sheet, dc.timestamp
+                   dc.sheet, dc.timestamp, dc.speaker, dc.start_ms, dc.end_ms,
+                   dc.region, dc.video_id, dc.source_kind, d.youtube_video_id, d.source_url
             FROM document_chunks dc
             JOIN documents d ON dc.document_id = d.id
             WHERE d.workspace_id = :workspace_id
@@ -514,6 +547,14 @@ def retrieve_chunks(notebook_id: str, query: str, source_ids: List[str], k: int)
                 "filename": row[5],
                 "sheet": row[6],
                 "timestamp": row[7],
+                "speaker": row[8],
+                "start_ms": row[9],
+                "end_ms": row[10],
+                "region": row[11],
+                "video_id": row[12],
+                "source_kind": row[13],
+                "youtube_video_id": row[14],
+                "source_url": row[15],
             })
         return matched_chunks
     finally:

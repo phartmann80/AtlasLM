@@ -246,6 +246,30 @@ def fmt_seat_limit(value: str) -> bool:
     return value.isdigit() and 1 <= int(value) <= 100
 
 
+def fmt_media_mb(value: str) -> bool:
+    return value.isdigit() and 1 <= int(value) <= 4096
+
+
+def fmt_media_seconds(value: str) -> bool:
+    return value.isdigit() and 1 <= int(value) <= 86400
+
+
+def fmt_concurrent_jobs(value: str) -> bool:
+    return value.isdigit() and 1 <= int(value) <= 16
+
+
+def fmt_abs_path(value: str) -> bool:
+    return value.startswith("/") and ".." not in value and PRINTABLE_RE.fullmatch(value) is not None
+
+
+def fmt_gladia_base(value: str) -> bool:
+    return value.rstrip("/") == "https://api.gladia.io"
+
+
+def fmt_gladia_callback(value: str) -> bool:
+    return value.rstrip("/") == "https://api.staging.atlaslm.cloud"
+
+
 CATALOG: list[tuple[str, str, Callable[[str], bool] | None]] = [
     ("ATLAS_RELEASE_SHA", AUTO, fmt_release_sha),
     ("DB_PASSWORD", GENERATED_SECRET, fmt_db_password),
@@ -285,6 +309,19 @@ CATALOG: list[tuple[str, str, Callable[[str], bool] | None]] = [
     ("ATLAS_TRACE_CONTENT", FIXED, fmt_exact("redacted")),
     ("RESEARCH_HTTP_TIMEOUT", FIXED, fmt_timeout),
     ("ATLAS_DEFAULT_SEAT_LIMIT", FIXED, fmt_seat_limit),
+    ("GLADIA_API_KEY", OPTIONAL_EMPTY, fmt_provider_secret),
+    ("GLADIA_BASE_URL", FIXED, fmt_gladia_base),
+    ("GLADIA_CALLBACK_BASE", FIXED, fmt_gladia_callback),
+    ("ATLAS_MEDIA_MAX_MB", FIXED, fmt_media_mb),
+    ("ATLAS_MEDIA_MAX_SECONDS", FIXED, fmt_media_seconds),
+    ("ATLAS_YTDLP_COOKIES", OPTIONAL_EMPTY, fmt_abs_path),
+    ("ATLAS_MEDIA_CONCURRENT_JOBS", FIXED, fmt_concurrent_jobs),
+    ("ATLAS_MEDIA_DIR", FIXED, fmt_exact("/data/media")),
+    ("ATLAS_KOKORO_MODEL", FIXED, fmt_exact("/voices/kokoro-v1.0.onnx")),
+    ("ATLAS_KOKORO_VOICES", FIXED, fmt_exact("/voices/voices-v1.0.bin")),
+    ("ATLAS_TTS_VOICE_A", FIXED, fmt_exact("af_heart")),
+    ("ATLAS_TTS_VOICE_B", FIXED, fmt_exact("am_michael")),
+    ("ATLAS_CHROMIUM_BIN", OPTIONAL_EMPTY, fmt_abs_path),
 ]
 
 FIRST_STAGING_EMPTY_OK = {
@@ -300,6 +337,9 @@ FIRST_STAGING_EMPTY_OK = {
     "GATEWAY_API_URL",
     "GATEWAY_API_MASTRA_KEY",
     "MASTRA_MODEL",
+    "GLADIA_API_KEY",
+    "ATLAS_YTDLP_COOKIES",
+    "ATLAS_CHROMIUM_BIN",
 }
 
 

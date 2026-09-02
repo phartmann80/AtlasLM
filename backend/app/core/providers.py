@@ -246,7 +246,10 @@ class OpenAICompatibleLLM(LLMProvider):
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
-        payload = {"model": self.model, "messages": messages, "temperature": 0.1}
+        return await self.generate_messages(messages)
+
+    async def generate_messages(self, messages: List[dict], temperature: float = 0.1) -> str:
+        payload = {"model": self.model, "messages": messages, "temperature": temperature}
         try:
             response = await self.client.post(
                 f"{self.base_url}/chat/completions",
@@ -482,3 +485,51 @@ class ProviderRegistry:
 
 
 provider_registry = ProviderRegistry()
+
+
+def describe_visual_source(image_bytes: bytes, mime: str, prompt: str) -> str:
+    """Synchronous vision describe used by image ingest. Lives here so the
+    leak audit can inspect provider URLs in one file.
+    """
+    import base64
+    import httpx as _httpx
+
+    api_key = settings.LANGDOCK_API_CODE or settings.LANGDOCK_API_KEY
+    if not api_key:
+        return ""
+    model = normalize_model_name(settings.LANGDOCK_MODEL or settings.MODEL)
+    data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+    payload = {
+        "model": model,
+        "temperature": 0.1,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are AtlasLM visual ingestion. Describe only what is "
+                    "visible. Do not infer facts that are not in the image."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            },
+        ],
+    }
+    try:
+        response = _httpx.post(
+            f"{settings.LANGDOCK_ENDPOINT_URL.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=90.0,
+        )
+        response.raise_for_status()
+        return (response.json()["choices"][0]["message"]["content"] or "").strip()
+    except Exception as exc:
+        raise ProviderError(
+            "Atlas could not describe this image. Try again, or upload a clearer photo.",
+            internal_detail=f"vision describe failed: {exc!r}",
+        ) from exc

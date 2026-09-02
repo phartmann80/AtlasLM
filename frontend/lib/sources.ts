@@ -1,15 +1,16 @@
 // frontend/lib/sources.ts
 export type SourceKind =
-  | "pdf" | "docx" | "pptx" | "xlsx" | "image" | "audio" | "youtube" | "web";
+  | "pdf" | "docx" | "pptx" | "xlsx" | "image" | "audio" | "video" | "youtube" | "web";
 
 export const SOURCE_TYPES = [
   { id: "pdf",   label: "PDF",         accept: ".pdf",            color: "#EF4444", status: "live", pipeline: "PyMuPDF page-by-page" },
   { id: "docx",  label: "Word",        accept: ".docx",           color: "#2563EB", status: "new",  pipeline: "Paragraphs + tables" },
   { id: "pptx",  label: "PowerPoint",  accept: ".pptx",           color: "#EA580C", status: "new",  pipeline: "Per-slide text + notes" },
   { id: "xlsx",  label: "Excel / CSV", accept: ".xlsx,.csv",      color: "#16A34A", status: "new",  pipeline: "Per-sheet rows" },
-  { id: "image", label: "Image (OCR)", accept: ".png,.jpg,.jpeg", color: "#A855F7", status: "new",  pipeline: "Tesseract OCR" },
-  { id: "audio", label: "Audio",       accept: ".mp3,.wav,.m4a",  color: "#EC4899", status: "new",  pipeline: "Offline Whisper transcript" },
-  { id: "youtube", label: "YouTube",   accept: "url",             color: "#DC2626", status: "new",  pipeline: "Captions first, Whisper fallback" },
+  { id: "image", label: "Image (OCR)", accept: ".png,.jpg,.jpeg,.webp,.heic,.heif", color: "#7c6bb5", status: "live", pipeline: "Tesseract OCR plus vision description" },
+  { id: "audio", label: "Audio",       accept: ".mp3,.wav,.m4a,.aac,.ogg,.flac", color: "#3b6ea8", status: "live",  pipeline: "ffmpeg plus Gladia transcript" },
+  { id: "video", label: "Video",       accept: ".mp4,.mov,.webm,.mkv", color: "#334155", status: "live", pipeline: "Audio strip plus Gladia transcript" },
+  { id: "youtube", label: "YouTube",   accept: "url",             color: "#1e293b", status: "live",  pipeline: "Captions first, audio fallback" },
   { id: "web",   label: "Website",     accept: "url",             color: "#0EA5E9", status: "live", pipeline: "Readable text crawl" },
 ] as const;
 

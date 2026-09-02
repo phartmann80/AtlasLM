@@ -38,6 +38,8 @@ import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiClient } from "@/lib/apiClient";
 import { citationChipLabel, resolveCitation, splitCitedParts } from "@/lib/citations";
+import SourcePreviewModal from "@/app/components/sources/SourcePreviewModal";
+import StudioMediaViewer from "@/app/components/studio/StudioMediaViewer";
 import { TRANSCRIPTION_LANGUAGES, runDashboardLinkIngest, runDashboardSourceRetry } from "@/lib/ingest";
 import UserMenu from "@/components/UserMenu";
 import "./atlas-workspace.css";
@@ -53,6 +55,10 @@ type Source = {
   status: SourceStatus;
   error_message?: string | null;
   created_at: string;
+  youtube_video_id?: string | null;
+  channel_name?: string | null;
+  thumbnail_path?: string | null;
+  media_duration_ms?: number | null;
 };
 type Citation = {
   chunk_id?: string;
@@ -69,12 +75,11 @@ type Citation = {
   venue?: string;
   file_type?: string;
   tag?: string;
-};
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  citations?: Citation[];
+  speaker?: string | null;
+  start_ms?: number | null;
+  end_ms?: number | null;
+  region?: string | null;
+  video_id?: string | null;
 };
 type SourcePreview = {
   id: string;
@@ -83,17 +88,34 @@ type SourcePreview = {
   source_url?: string | null;
   status: SourceStatus;
   error_message?: string | null;
+  youtube_video_id?: string | null;
+  channel_name?: string | null;
+  thumbnail_path?: string | null;
+  media_url?: string | null;
+  has_media?: boolean;
   chunks: Array<{
     id: string;
     content: string;
     page_number?: number | null;
     timestamp?: number | null;
     sheet?: string | null;
+    speaker?: string | null;
+    start_ms?: number | null;
+    end_ms?: number | null;
+    region?: string | null;
+    source_kind?: string | null;
+    video_id?: string | null;
   }>;
+};
+type Message = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  citations?: Citation[];
 };
 type StudioOutput = {
   id: string;
-  output_type: "report" | "mind_map" | "study_guide" | "quiz" | "flashcards";
+  output_type: "report" | "mind_map" | "study_guide" | "quiz" | "flashcards" | "audio_overview" | "video_overview" | "infographic";
   title: string;
   status: string;
   content: Record<string, unknown> | string | null;
@@ -138,7 +160,9 @@ const DEFAULT_STUDIO_TYPES: StudioCapability[] = [
   { id: "mind_map", label: "Mind Map", enabled: false, reason: "Mind maps will be enabled after the notebook-to-report review." },
   { id: "quiz", label: "Quiz", enabled: false, reason: "Quizzes will be enabled after the notebook-to-report review." },
   { id: "flashcards", label: "Flashcards", enabled: false, reason: "Flashcards will be enabled after the notebook-to-report review." },
-  { id: "audio_overview", label: "Audio Overview", enabled: false, reason: "Audio overview will be enabled after the notebook-to-report review." },
+  { id: "audio_overview", label: "Audio Overview", detail: "Two-host spoken summary from ready sources", enabled: true },
+  { id: "video_overview", label: "Video Overview", detail: "Narrated slides from ready sources", enabled: true },
+  { id: "infographic", label: "Infographic", detail: "Key facts poster from ready sources", enabled: true },
 ];
 
 const ACTIONS: Array<{
@@ -172,8 +196,9 @@ function normalizeStatus(status?: string): SourceStatus {
 
 function sourceIcon(type: string): LucideIcon {
   const kind = type.toLowerCase();
-  if (kind.includes("youtube")) return Video;
+  if (kind.includes("youtube") || kind.includes("video")) return Video;
   if (kind.includes("audio")) return FileAudio;
+  if (kind.includes("image")) return FileUp;
   if (kind.includes("url") || kind.includes("web")) return Globe2;
   return FileText;
 }
@@ -250,6 +275,7 @@ export default function Dashboard() {
   const [showSourceComposer, setShowSourceComposer] = useState(false);
   const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
+  const [citationSeekMs, setCitationSeekMs] = useState<number | null>(null);
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
   const [sourcePreview, setSourcePreview] = useState<SourcePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -281,6 +307,9 @@ export default function Dashboard() {
       return matchesQuery;
     });
   }, [search, sources]);
+  const viewingOutput = selectedOutput
+    ? outputs.find((item) => item.id === selectedOutput.id) || selectedOutput
+    : null;
 
   const setWorkspaceAndPersist = useCallback((next: Workspace) => {
     setWorkspace(next);
@@ -562,7 +591,7 @@ export default function Dashboard() {
       for (const file of Array.from(files)) {
         const form = new FormData();
         form.append("file", file);
-        if (/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(file.name)) {
+        if (/\.(mp3|wav|m4a|aac|ogg|flac|mp4|mov|webm|mkv)$/i.test(file.name)) {
           form.append("language", transcriptionLanguage);
         }
         await apiClient.postForm<Source>(
@@ -635,8 +664,9 @@ export default function Dashboard() {
     }
   };
 
-  const openSourcePreview = async (source: Source) => {
+  const openSourcePreview = async (source: Source, seekMs?: number | null) => {
     setSelectedSource(source);
+    setCitationSeekMs(seekMs ?? null);
     setSourcePreview(null);
     setPreviewLoading(true);
     try {
@@ -646,6 +676,24 @@ export default function Dashboard() {
       setError(errorMessage(caught, "Atlas could not open the indexed source text."));
     } finally {
       setPreviewLoading(false);
+    }
+  };
+
+  const openCitation = (citation: Citation) => {
+    setSelectedCitation(citation);
+    const seekMs = citation.start_ms ?? (citation.timestamp != null ? Math.round(citation.timestamp * 1000) : null);
+    const source = sources.find((item) => item.id === citation.document_id);
+    if (source) {
+      void openSourcePreview(source, seekMs);
+      return;
+    }
+    if (citation.video_id && seekMs != null) {
+      window.open(`https://www.youtube.com/watch?v=${citation.video_id}&t=${Math.floor(seekMs / 1000)}`, "_blank");
+      return;
+    }
+    const deepLink = citation.external_url || citation.source_url;
+    if (deepLink && deepLink.includes("youtube.com")) {
+      window.open(deepLink, "_blank");
     }
   };
 
@@ -698,7 +746,8 @@ export default function Dashboard() {
         output_type: type,
         title: `Atlas ${outputLabel(type)}`,
         source_ids: readySources.map((source) => source.id),
-        length: "standard",
+        length: "brief",
+        length_minutes: type === "audio_overview" ? 3 : undefined,
         idempotency_key: crypto.randomUUID(),
       });
       setOutputs((current) => [output, ...current.filter((item) => item.id !== output.id)]);
@@ -751,7 +800,7 @@ export default function Dashboard() {
       return <div className="output-report-markdown">{splitCitedParts(output.content).map((part, index) => {
         if (part.type !== "citation") return <span key={index}>{part.value}</span>;
         const citation = resolveCitation(part.tag, citations);
-        return <button type="button" className="citation-chip" key={index} onClick={() => citation && setSelectedCitation(citation as Citation)} disabled={!citation}><Quote size={12} /> {citationChipLabel(citation, part.index)}</button>;
+        return <button type="button" className="citation-chip" key={index} onClick={() => citation && openCitation(citation as Citation)} disabled={!citation}><Quote size={12} /> {citationChipLabel(citation, part.index)}</button>;
       })}</div>;
     }
     if (typeof output.content === "string") {
@@ -779,6 +828,9 @@ export default function Dashboard() {
     if (output.output_type === "mind_map") {
       return <div className="mind-map-output"><div className="mind-map-root"><Sparkles size={16} /> {String(content.root || "Source map")}</div><div className="mind-map-branches">{records(content.branches).map((branch, index) => <article key={index}><strong>{String(branch.label || "Branch")}</strong>{strings(branch.children).map((child, childIndex) => <span key={childIndex}>{child}</span>)}</article>)}</div></div>;
     }
+    if (output.output_type === "audio_overview" || output.output_type === "video_overview" || output.output_type === "infographic") {
+      return <StudioMediaViewer outputType={output.output_type} content={content} />;
+    }
     return <pre className="output-markdown">{JSON.stringify(content, null, 2)}</pre>;
   };
 
@@ -792,7 +844,7 @@ export default function Dashboard() {
           key={`${message.id}-${index}`}
           type="button"
           className="citation-chip"
-          onClick={() => citation && setSelectedCitation(citation as Citation)}
+          onClick={() => citation && openCitation(citation as Citation)}
           disabled={!citation}
         >
           <Quote size={12} /> {citationChipLabel(citation, part.index)}
@@ -962,7 +1014,7 @@ export default function Dashboard() {
         </div>
         <div className="output-create-list">
           {studioTypes.map((capability) => {
-            const isReport = capability.id === "report";
+            const enabledType = capability.id as StudioOutput["output_type"];
             return (
               <button
                 type="button"
@@ -975,12 +1027,12 @@ export default function Dashboard() {
                     setNotice(capability.reason || "This Studio tool is not enabled yet.");
                     return;
                   }
-                  if (isReport) void createOutput("report");
+                  void createOutput(enabledType);
                 }}
               >
                 <WandSparkles size={16} />
                 <span>{capability.label}</span>
-                {capability.enabled ? (generatingOutput === "report" && isReport ? <Loader2 size={14} className="spin" /> : <Plus size={14} />) : <span className="planned-badge">Planned</span>}
+                {capability.enabled ? (generatingOutput === capability.id ? <Loader2 size={14} className="spin" /> : <Plus size={14} />) : <span className="planned-badge">Planned</span>}
               </button>
             );
           })}
@@ -995,11 +1047,11 @@ export default function Dashboard() {
                   <small>{outputLabel(output.output_type)} · {jobStatusLabel(output.status)}</small>
                   {output.error && <span className="studio-job-error">{output.error}</span>}
                 </button>
-                {output.status === "failed" && output.output_type === "report" && (
-                  <button type="button" className="studio-retry" onClick={() => void createOutput("report")}>Retry report</button>
+                {output.status === "failed" && (
+                  <button type="button" className="studio-retry" onClick={() => void createOutput(output.output_type)}>Retry {outputLabel(output.output_type)}</button>
                 )}
               </div>
-            )) : <div className="output-empty"><strong>No Studio jobs yet</strong><span>Generate a report from ready sources. Other Studio tools stay planned until the backend enables them.</span></div>}
+            )) : <div className="output-empty"><strong>No Studio jobs yet</strong><span>Generate a report, audio overview, video overview, or infographic from ready sources.</span></div>}
           </div>
         </div>
       </aside>
@@ -1010,13 +1062,23 @@ export default function Dashboard() {
         <button type="button" className={mobilePane === "studio" ? "active" : ""} onClick={() => setMobilePane("studio")}>Studio</button>
       </nav>
 
-      {showSourceComposer && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSourceComposer(false); }}><div className="source-composer" role="dialog" aria-modal="true" aria-labelledby="source-composer-title"><div className="composer-heading"><div><p className="eyebrow">Expand the knowledge base</p><h2 id="source-composer-title">Add sources to Atlas</h2><p>Files, websites, and YouTube links are ingested through the live backend. Social video URLs that are not YouTube are not supported yet.</p></div><button type="button" className="icon-button" onClick={() => setShowSourceComposer(false)}><X size={17} /></button></div><div className="composer-tabs"><button type="button" className={sourceMode === "files" ? "selected" : ""} onClick={() => setSourceMode("files")}><FileUp size={16} /> Upload files</button><button type="button" className={sourceMode === "link" ? "selected" : ""} onClick={() => setSourceMode("link")}><Globe2 size={16} /> Paste a link</button><button type="button" className={sourceMode === "text" ? "selected" : ""} onClick={() => setSourceMode("text")}><FileText size={16} /> Paste text</button></div>{sourceMode === "files" && <div className="composer-body"><label className="field-label">Transcription language for audio files<select value={transcriptionLanguage} onChange={(event) => setTranscriptionLanguage(event.target.value)} disabled={sourceBusy}>{TRANSCRIPTION_LANGUAGES.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</select></label><button type="button" className="dropzone" onClick={() => fileInputRef.current?.click()} disabled={sourceBusy}><span className="dropzone-icon"><UploadCloud size={22} /></span><strong>{sourceBusy ? "Adding sources..." : "Choose files from your device"}</strong><span>PDF, DOCX, PPTX, XLSX, TXT, audio, and image files</span></button><input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.mp3,.wav,.m4a,.aac,.ogg,.flac,.png,.jpg,.jpeg,.webp" className="visually-hidden" onChange={(event) => void handleFiles(event.target.files)} /><div className="composer-divider"><span>or connect a library</span></div><Link href="/settings/connections" className="google-connect"><span className="google-connect-mark">G</span><span><strong>Connect Google Drive</strong><small>Opens the real connections settings page</small></span><ArrowUpRight size={16} /></Link></div>}{sourceMode === "link" && <form className="composer-body" onSubmit={(event) => void handleUrl(event)}><label className="field-label">Website or YouTube URL<input value={sourceInput} onChange={(event) => setSourceInput(event.target.value)} placeholder="example.com/article or youtube.com/watch?v=..." autoFocus /></label><label className="field-label">Transcription language for YouTube<select value={transcriptionLanguage} onChange={(event) => setTranscriptionLanguage(event.target.value)} disabled={sourceBusy}>{TRANSCRIPTION_LANGUAGES.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</select></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceInput.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding link</> : <><Plus size={16} /> Add link</>}</button><p className="composer-footnote">Websites go to /documents/url. YouTube links go to /documents/youtube with the selected language. AtlasLM does not invent progress or sample sources.</p></form>}{sourceMode === "text" && <form className="composer-body" onSubmit={(event) => void handleText(event)}><label className="field-label">Title<input value={sourceTextTitle} onChange={(event) => setSourceTextTitle(event.target.value)} placeholder="Lecture notes, research idea, meeting notes..." autoFocus /></label><label className="field-label">Text<textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} rows={7} placeholder="Paste the material Atlas should understand..." /></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceText.trim() || !sourceTextTitle.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding text</> : <><Plus size={16} /> Add text</>}</button></form>}</div></div>}
+      {showSourceComposer && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSourceComposer(false); }}><div className="source-composer" role="dialog" aria-modal="true" aria-labelledby="source-composer-title"><div className="composer-heading"><div><p className="eyebrow">Expand the knowledge base</p><h2 id="source-composer-title">Add sources to Atlas</h2><p>Files, websites, and YouTube links are ingested through the live backend. Social video URLs that are not YouTube are not supported yet.</p></div><button type="button" className="icon-button" onClick={() => setShowSourceComposer(false)}><X size={17} /></button></div><div className="composer-tabs"><button type="button" className={sourceMode === "files" ? "selected" : ""} onClick={() => setSourceMode("files")}><FileUp size={16} /> Upload files</button><button type="button" className={sourceMode === "link" ? "selected" : ""} onClick={() => setSourceMode("link")}><Globe2 size={16} /> Paste a link</button><button type="button" className={sourceMode === "text" ? "selected" : ""} onClick={() => setSourceMode("text")}><FileText size={16} /> Paste text</button></div>{sourceMode === "files" && <div className="composer-body"><label className="field-label">Transcription language for audio and video files<select value={transcriptionLanguage} onChange={(event) => setTranscriptionLanguage(event.target.value)} disabled={sourceBusy}>{TRANSCRIPTION_LANGUAGES.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</select></label><button type="button" className="dropzone" onClick={() => fileInputRef.current?.click()} disabled={sourceBusy}><span className="dropzone-icon"><UploadCloud size={22} /></span><strong>{sourceBusy ? "Adding sources..." : "Choose files from your device"}</strong><span>PDF, DOCX, PPTX, XLSX, TXT, audio, video, and image files</span></button><input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.mp3,.wav,.m4a,.aac,.ogg,.flac,.mp4,.mov,.webm,.mkv,.png,.jpg,.jpeg,.webp,.heic,.heif" className="visually-hidden" onChange={(event) => void handleFiles(event.target.files)} /><div className="composer-divider"><span>or connect a library</span></div><Link href="/settings/connections" className="google-connect"><span className="google-connect-mark">G</span><span><strong>Connect Google Drive</strong><small>Opens the real connections settings page</small></span><ArrowUpRight size={16} /></Link></div>}{sourceMode === "link" && <form className="composer-body" onSubmit={(event) => void handleUrl(event)}><label className="field-label">Website or YouTube URL<input value={sourceInput} onChange={(event) => setSourceInput(event.target.value)} placeholder="example.com/article or youtube.com/watch?v=..." autoFocus /></label><label className="field-label">Transcription language for YouTube<select value={transcriptionLanguage} onChange={(event) => setTranscriptionLanguage(event.target.value)} disabled={sourceBusy}>{TRANSCRIPTION_LANGUAGES.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</select></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceInput.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding link</> : <><Plus size={16} /> Add link</>}</button><p className="composer-footnote">Websites go to /documents/url. YouTube links go to /documents/youtube with the selected language. AtlasLM does not invent progress or sample sources.</p></form>}{sourceMode === "text" && <form className="composer-body" onSubmit={(event) => void handleText(event)}><label className="field-label">Title<input value={sourceTextTitle} onChange={(event) => setSourceTextTitle(event.target.value)} placeholder="Lecture notes, research idea, meeting notes..." autoFocus /></label><label className="field-label">Text<textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} rows={7} placeholder="Paste the material Atlas should understand..." /></label><button type="submit" className="primary-button full-width" disabled={sourceBusy || !sourceText.trim() || !sourceTextTitle.trim()}>{sourceBusy ? <><Loader2 size={16} className="spin" /> Adding text</> : <><Plus size={16} /> Add text</>}</button></form>}</div></div>}
 
-      {selectedSource && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setSelectedSource(null); setSourcePreview(null); } }}><div className="source-preview-modal" role="dialog" aria-modal="true" aria-labelledby="source-preview-title"><div className="composer-heading"><div><p className="eyebrow">Indexed source</p><h2 id="source-preview-title">{selectedSource.filename}</h2><p>{selectedSource.file_type.toUpperCase()} source text that Atlas can search and cite.</p></div><button type="button" className="icon-button" onClick={() => { setSelectedSource(null); setSourcePreview(null); }}><X size={17} /></button></div>{selectedSource.source_url && <a className="source-preview-link" href={selectedSource.source_url} target="_blank" rel="noreferrer"><SquareArrowOutUpRight size={14} /> Open original source</a>}{previewLoading ? <div className="preview-loading"><Loader2 size={22} className="spin" /><p>Loading the text Atlas indexed...</p></div> : sourcePreview?.chunks.length ? <div className="preview-chunks">{sourcePreview.chunks.map((chunk) => <article className="preview-chunk" key={chunk.id}><span>{chunk.timestamp != null ? `Timestamp ${formatDuration(chunk.timestamp)}` : chunk.page_number ? `Page ${chunk.page_number}` : chunk.sheet ? `Sheet ${chunk.sheet}` : "Indexed excerpt"}</span><p>{chunk.content}</p></article>)}</div> : <div className="preview-loading"><FileText size={22} /><p>No indexed text is available yet. Check the source status and try again.</p></div>}</div></div>}
+      {selectedSource && (
+        <SourcePreviewModal
+          filename={selectedSource.filename}
+          fileType={selectedSource.file_type}
+          sourceUrl={selectedSource.source_url}
+          preview={sourcePreview}
+          loading={previewLoading}
+          seekMs={citationSeekMs}
+          onClose={() => { setSelectedSource(null); setSourcePreview(null); setCitationSeekMs(null); }}
+        />
+      )}
 
-      {selectedOutput && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedOutput(null); }}><div className="studio-output-modal" role="dialog" aria-modal="true"><div className="output-viewer-heading"><div><p className="eyebrow">{outputLabel(selectedOutput.output_type)}</p><h2>{selectedOutput.title}</h2></div><button type="button" className="icon-button" onClick={() => setSelectedOutput(null)}><X size={16} /></button></div><div className="output-content">{selectedOutput.status === "failed" ? <div className="output-building"><CircleAlert size={22} /><h3>This output could not be completed</h3><p>{selectedOutput.error || "Atlas could not finish this output. Try again."}</p>{selectedOutput.output_type === "report" && <button type="button" className="primary-button" onClick={() => void createOutput("report")}>Retry report</button>}</div> : selectedOutput.status !== "ready" ? <div className="output-building"><div className="building-orbit"><Sparkles size={22} /></div><h3>Atlas is building this for you</h3><p>Queued and processing jobs stay on the server. Refresh keeps the same artifact.</p></div> : selectedOutput.content ? renderOutputContent(selectedOutput) : <div className="output-building"><Check size={22} /><h3>Your output is ready</h3><p>Atlas returned an empty result. Try generating it again.</p></div>}</div></div></div>}
+      {viewingOutput && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedOutput(null); }}><div className="studio-output-modal" role="dialog" aria-modal="true"><div className="output-viewer-heading"><div><p className="eyebrow">{outputLabel(viewingOutput.output_type)}</p><h2>{viewingOutput.title}</h2></div><button type="button" className="icon-button" onClick={() => setSelectedOutput(null)}><X size={16} /></button></div><div className="output-content">{viewingOutput.status === "failed" ? <div className="output-building"><CircleAlert size={22} /><h3>This output could not be completed</h3><p>{viewingOutput.error || "Atlas could not finish this output. Try again."}</p><button type="button" className="primary-button" onClick={() => void createOutput(viewingOutput.output_type)}>Retry {outputLabel(viewingOutput.output_type)}</button></div> : viewingOutput.status !== "ready" ? <div className="output-building"><div className="building-orbit"><Sparkles size={22} /></div><h3>Atlas is building this for you</h3><p>{viewingOutput.status === "pending" ? "Queued on the server." : "Processing on the worker. This page updates when it finishes."}</p></div> : viewingOutput.content ? renderOutputContent(viewingOutput) : <div className="output-building"><Check size={22} /><h3>Your output is ready</h3><p>Atlas returned an empty result. Try generating it again.</p></div>}</div></div></div>}
 
-      {selectedCitation && <div className="citation-drawer"><div className="citation-drawer-heading"><div><p className="eyebrow">Source reference</p><h3>{selectedCitation.filename || "Atlas source"}</h3></div><button type="button" className="icon-button" onClick={() => setSelectedCitation(null)}><X size={16} /></button></div><div className="citation-meta">{selectedCitation.timestamp != null ? `Timestamp ${formatDuration(selectedCitation.timestamp)}` : selectedCitation.page_number ? `Page ${selectedCitation.page_number}` : selectedCitation.source_label || "Verified source excerpt"}{(selectedCitation.external_url || selectedCitation.source_url) && <a href={selectedCitation.external_url || selectedCitation.source_url} target="_blank" rel="noreferrer">Open source <SquareArrowOutUpRight size={13} /></a>}</div><blockquote>{selectedCitation.content || selectedCitation.text || selectedCitation.quote || "No excerpt was returned for this citation."}</blockquote></div>}
+      {selectedCitation && <div className="citation-drawer"><div className="citation-drawer-heading"><div><p className="eyebrow">Source reference</p><h3>{selectedCitation.filename || "Atlas source"}</h3></div><button type="button" className="icon-button" onClick={() => setSelectedCitation(null)}><X size={16} /></button></div><div className="citation-meta">{selectedCitation.speaker ? `${selectedCitation.speaker} · ` : ""}{selectedCitation.start_ms != null ? `Timestamp ${formatDuration(selectedCitation.start_ms / 1000)}` : selectedCitation.timestamp != null ? `Timestamp ${formatDuration(selectedCitation.timestamp)}` : selectedCitation.region ? `Region ${selectedCitation.region}` : selectedCitation.page_number ? `Page ${selectedCitation.page_number}` : selectedCitation.source_label || "Verified source excerpt"}{(selectedCitation.external_url || selectedCitation.source_url) && <a href={selectedCitation.external_url || selectedCitation.source_url} target="_blank" rel="noreferrer">Open source <SquareArrowOutUpRight size={13} /></a>}</div><blockquote>{selectedCitation.content || selectedCitation.text || selectedCitation.quote || "No excerpt was returned for this citation."}</blockquote></div>}
     </div>
   );
 }

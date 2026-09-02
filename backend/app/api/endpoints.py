@@ -1,6 +1,9 @@
 import uuid
 import asyncio
+import os
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -344,9 +347,21 @@ def preview_document(
                 "page_number": chunk.page_number,
                 "timestamp": chunk.timestamp,
                 "sheet": chunk.sheet,
+                "source_kind": getattr(chunk, "source_kind", None),
+                "speaker": getattr(chunk, "speaker", None),
+                "start_ms": getattr(chunk, "start_ms", None),
+                "end_ms": getattr(chunk, "end_ms", None),
+                "region": getattr(chunk, "region", None),
+                "video_id": getattr(chunk, "video_id", None),
             }
             for chunk in chunks
         ],
+        "youtube_video_id": getattr(doc, "youtube_video_id", None),
+        "channel_name": getattr(doc, "channel_name", None),
+        "thumbnail_path": getattr(doc, "thumbnail_path", None),
+        "media_duration_ms": getattr(doc, "media_duration_ms", None),
+        "has_media": bool(getattr(doc, "storage_path", None)),
+        "media_url": f"/api/v1/documents/{doc.id}/media" if getattr(doc, "storage_path", None) else None,
     }
 
 
@@ -369,15 +384,6 @@ async def upload_document(
     if existing:
         return existing
 
-    # Validate file size (50 MB limit)
-    MAX_FILE_SIZE = 50 * 1024 * 1024
-    file_bytes = await file.read()
-    if len(file_bytes) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File size exceeds the maximum upload limit of 50MB.",
-        )
-
     filename = file.filename or "uploaded-source"
     filename_lower = filename.lower()
     if filename_lower.endswith(".pdf"):
@@ -394,14 +400,104 @@ async def upload_document(
         file_type = "xlsx"
     elif filename_lower.endswith(".pptx"):
         file_type = "pptx"
-    elif filename_lower.endswith((".png", ".jpg", ".jpeg", ".webp")):
+    elif filename_lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif")):
         file_type = "image"
     elif filename_lower.endswith((".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")):
         file_type = "audio"
+    elif filename_lower.endswith((".mp4", ".mov", ".webm", ".mkv")):
+        file_type = "video"
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file format. Supported: PDF, DOCX, XLSX, PPTX, TXT, MD, CSV, PNG, JPG, WEBP, MP3, WAV, M4A, AAC, OGG, FLAC.",
+            detail=(
+                "Invalid file format. Supported: PDF, DOCX, XLSX, PPTX, TXT, MD, CSV, "
+                "PNG, JPG, WEBP, HEIC, MP3, WAV, M4A, AAC, OGG, FLAC, MP4, MOV, WEBM, MKV."
+            ),
+        )
+
+    if file_type in {"image", "audio", "video"}:
+        from ..services.media.ingest_api import (
+            http_error,
+            start_media_document,
+            start_media_document_from_path,
+        )
+        from ..services.media import MediaIngestError
+        from ..core.config import settings as _settings
+        try:
+            transcription_language = (
+                normalize_transcription_language(language)
+                if file_type in {"audio", "video"} else None
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        max_mb = (
+            int(getattr(_settings, "ATLAS_IMAGE_MAX_MB", 20) or 20)
+            if file_type == "image"
+            else int(getattr(_settings, "ATLAS_MEDIA_MAX_MB", 2048) or 2048)
+        )
+        max_bytes = max_mb * 1024 * 1024
+        suffix = Path(filename).suffix.lower() or ".bin"
+        fd, spool_path = tempfile.mkstemp(suffix=suffix)
+        size = 0
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise MediaIngestError(
+                            "This image is larger than 20 MB. Compress it or upload a smaller file."
+                            if file_type == "image"
+                            else "This file is larger than the staging limit. Upload a shorter recording."
+                        )
+                    handle.write(chunk)
+            try:
+                if file_type == "image":
+                    data = Path(spool_path).read_bytes()
+                    doc = start_media_document(
+                        db,
+                        user_id=uid,
+                        workspace_id=workspace_id,
+                        filename=filename,
+                        data=data,
+                        language=transcription_language,
+                        idempotency_key=idempotency_key,
+                    )
+                else:
+                    doc = start_media_document_from_path(
+                        db,
+                        user_id=uid,
+                        workspace_id=workspace_id,
+                        filename=filename,
+                        path=spool_path,
+                        size_bytes=size,
+                        language=transcription_language,
+                        idempotency_key=idempotency_key,
+                    )
+                    spool_path = ""
+            except MediaIngestError as exc:
+                raise http_error(exc) from exc
+        finally:
+            if spool_path:
+                try:
+                    os.unlink(spool_path)
+                except OSError:
+                    pass
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content=jsonable_encoder(DocumentOut.model_validate(doc)),
+        )
+
+    file_bytes = await file.read()
+
+    # Validate file size (50 MB limit) for document types.
+    MAX_FILE_SIZE = 50 * 1024 * 1024
+    if len(file_bytes) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File size exceeds the maximum upload limit of 50MB.",
         )
 
     try:
@@ -626,7 +722,30 @@ async def retry_document(
         return doc
 
     kind = (doc.file_type or "").lower()
-    if kind not in {"url", "youtube"} or not doc.source_url:
+    if kind in {"image", "audio", "video", "youtube"}:
+        from ..services.media.ingest_api import http_error, requeue_media_document
+        from ..services.media import MediaIngestError
+        language = body.language if body else None
+        try:
+            transcription_language = normalize_transcription_language(language) if language else None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        try:
+            doc = requeue_media_document(
+                db,
+                user_id=uid,
+                document=doc,
+                language=transcription_language,
+                idempotency_key=idempotency_key,
+            )
+        except MediaIngestError as exc:
+            raise http_error(exc) from exc
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content=jsonable_encoder(DocumentOut.model_validate(doc)),
+        )
+
+    if kind not in {"url"} or not doc.source_url:
         raise HTTPException(
             status_code=422,
             detail="Re-add this file to retry. AtlasLM does not keep the original upload for retry.",
@@ -637,19 +756,10 @@ async def retry_document(
 
     language = body.language if body else None
     try:
-        if kind == "youtube":
-            payload = await _youtube_ingest_payload(doc.source_url, language)
-            filename = payload["filename"]
-            file_bytes = payload["file_bytes"]
-            source_url = payload["canonical_url"]
-            transcription_language = payload["language"]
-            doc.filename = filename
-            doc.source_url = source_url
-        else:
-            file_bytes = await _download_public_html(doc.source_url)
-            filename = doc.filename
-            source_url = doc.source_url
-            transcription_language = None
+        file_bytes = await _download_public_html(doc.source_url)
+        filename = doc.filename
+        source_url = doc.source_url
+        transcription_language = None
     except HTTPException as exc:
         doc.status = "failed"
         doc.error_message = str(exc.detail) if exc.detail else previous_error
@@ -952,9 +1062,20 @@ def list_studio_types():
             {
                 "id": "audio_overview",
                 "label": "Audio Overview",
-                "detail": planned,
-                "enabled": False,
-                "reason": planned,
+                "detail": "Two-host spoken summary from ready sources",
+                "enabled": True,
+            },
+            {
+                "id": "video_overview",
+                "label": "Video Overview",
+                "detail": "Narrated slides from ready sources",
+                "enabled": True,
+            },
+            {
+                "id": "infographic",
+                "label": "Infographic",
+                "detail": "Key facts poster from ready sources",
+                "enabled": True,
             },
         ]
     }
@@ -1091,6 +1212,73 @@ async def create_studio_output(
                 run.error_message = "Report generation failed."
                 db.commit()
                 append_run_event(db, run, "failed", "failed", 100, "Report generation failed.")
+        return _serialize_studio(db, output)
+
+    if payload.output_type in {"audio_overview", "video_overview", "infographic"}:
+        from ..services.jobs import enqueue_media_job
+        from ..services.media import (
+            JOB_AUDIO_OVERVIEW, JOB_INFOGRAPHIC, JOB_VIDEO_OVERVIEW, MediaIngestError,
+        )
+        from ..services.media import jobs as jobstore
+        from ..services.media.ingest_api import http_error
+        kind = {
+            "audio_overview": JOB_AUDIO_OVERVIEW,
+            "video_overview": JOB_VIDEO_OVERVIEW,
+            "infographic": JOB_INFOGRAPHIC,
+        }[payload.output_type]
+        scope = payload.source_ids
+        if scope is None:
+            scope = scoped_document_ids(db, ws, payload.synthesis_node_id)
+        ready = db.query(Document).filter(
+            Document.workspace_id == ws.id,
+            Document.status == "ready",
+        )
+        if scope is not None:
+            ready = ready.filter(Document.id.in_(scope))
+        if ready.count() == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Add at least one ready source before generating this Studio output.",
+            )
+        minutes = payload.length_minutes
+        if minutes is None:
+            minutes = {"brief": 3, "standard": 8, "deep": 15}.get(payload.length, 8)
+        try:
+            jobstore.assert_concurrency(db, uid)
+        except MediaIngestError as exc:
+            raise http_error(exc) from exc
+        title = payload.title or _default_studio_title(payload.output_type)
+        output = StudioOutput(
+            id=uuid.uuid4(),
+            workspace_id=ws.id,
+            synthesis_node_id=payload.synthesis_node_id,
+            output_type=payload.output_type,
+            title=title,
+            status="pending",
+            source_scope=[str(s) for s in scope] if scope else None,
+            idempotency_key=payload.idempotency_key,
+            progress=0,
+        )
+        db.add(output)
+        db.flush()
+        job = jobstore.create_job(
+            db,
+            user_id=uid,
+            workspace_id=ws.id,
+            kind=kind,
+            payload={
+                "source_ids": [str(s) for s in (scope or [])],
+                "length_minutes": minutes,
+            },
+            studio_output_id=output.id,
+            idempotency_key=payload.idempotency_key,
+        )
+        db.commit()
+        db.refresh(output)
+        try:
+            enqueue_media_job(job.id)
+        except Exception:
+            pass
         return _serialize_studio(db, output)
 
     # Resolve scope with the EXISTING Patch 007 helper. A forged or cross-user
@@ -1230,6 +1418,9 @@ def _default_studio_title(output_type: str) -> str:
         "study_guide": "Study Guide",
         "quiz": "Quiz",
         "flashcards": "Flashcards",
+        "audio_overview": "Audio Overview",
+        "video_overview": "Video Overview",
+        "infographic": "Infographic",
     }.get(output_type, "Studio Output")
 
 
@@ -1494,61 +1685,28 @@ async def ingest_youtube(
     if existing:
         return existing
 
-    url = _normalize_public_url(str(body.url))
-    payload = await _youtube_ingest_payload(url, body.language)
-    filename = payload["filename"]
-    file_bytes = payload["file_bytes"]
-    canonical_url = payload["canonical_url"]
-    transcription_language = payload["language"]
-
-    pipeline = DocumentPipeline(db)
-
-    # Async path via Redis queue
-    if redis_healthy():
-        doc = pipeline.create_pending_document(
-            workspace_id=workspace_id,
-            filename=filename,
-            file_type="youtube",
-            source_url=canonical_url,
-            idempotency_key=idempotency_key,
-        )
-        try:
-            enqueue_ingestion_job(
-                document_id=doc.id,
-                workspace_id=workspace_id,
-                filename=filename,
-                file_type="youtube",
-                file_bytes=file_bytes,
-                source_url=canonical_url,
-                language=transcription_language,
-            )
-        except Exception:
-            db.delete(doc)
-            db.commit()
-        else:
-            return JSONResponse(
-                status_code=status.HTTP_202_ACCEPTED,
-                content=jsonable_encoder(DocumentOut.model_validate(doc)),
-            )
-
-    # Sync fallback
+    url = str(body.url)
+    from ..services.media.ingest_api import http_error, start_youtube_document
+    from ..services.media import MediaIngestError
     try:
-        doc = await pipeline.ingest_document(
+        transcription_language = normalize_transcription_language(body.language) if body.language else None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        doc = start_youtube_document(
+            db,
+            user_id=uid,
             workspace_id=workspace_id,
-            filename=filename,
-            file_bytes=file_bytes,
-            file_type="youtube",
-            source_url=canonical_url,
+            url=url,
             language=transcription_language,
             idempotency_key=idempotency_key,
         )
-        return doc
-    except ProviderError as e:
-        raise HTTPException(status_code=503, detail=e.public_message)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except MediaIngestError as exc:
+        raise http_error(exc) from exc
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content=jsonable_encoder(DocumentOut.model_validate(doc)),
+    )
 
 
 # -- Workspace Graph (Canvas Connections) Endpoints ----------------------------
@@ -2316,3 +2474,136 @@ def remove_member(workspace_id: str, member_user_id: str,
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"removed": member_user_id}
+
+
+@router.post("/internal/media/stt-callback")
+async def media_stt_callback(request: Request, db: Session = Depends(get_db)):
+    token = request.query_params.get("token") or ""
+    from ..services.media import jobs as jobstore
+    from ..services.media.runner import complete_stt_job
+    from ..services.media import MediaIngestError
+    job = jobstore.get_by_callback(db, token)
+    if not job:
+        raise HTTPException(status_code=403, detail="Invalid callback token.")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        complete_stt_job(db, job, payload=body if body else None)
+    except MediaIngestError as exc:
+        from ..services.media.runner import _fail_document
+        _fail_document(db, job, exc.public_message)
+    return {"ok": True}
+
+
+@router.get("/documents/{document_id}/media")
+def document_media(request: Request, document_id: uuid.UUID, db: Session = Depends(get_db)):
+    uid = current_user_id(request)
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    _get_owned_workspace(doc.workspace_id, uid, db)
+    path = getattr(doc, "storage_path", None)
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Media file is not available.")
+    from fastapi.responses import FileResponse
+    suffix = os.path.splitext(path)[1].lower()
+    media_types = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".webp": "image/webp", ".mp3": "audio/mpeg", ".wav": "audio/wav",
+        ".m4a": "audio/mp4", ".flac": "audio/flac", ".mp4": "video/mp4",
+        ".webm": "video/webm", ".mov": "video/quicktime", ".mkv": "video/x-matroska",
+    }
+    return FileResponse(path, media_type=media_types.get(suffix, "application/octet-stream"))
+
+
+@router.get("/workspaces/{workspace_id}/jobs")
+def list_media_jobs(request: Request, workspace_id: uuid.UUID, db: Session = Depends(get_db)):
+    uid = current_user_id(request)
+    _get_owned_workspace(workspace_id, uid, db)
+    from ..models import MediaJob
+    from ..services.media import jobs as jobstore
+    rows = (
+        db.query(MediaJob)
+        .filter(MediaJob.workspace_id == workspace_id, MediaJob.user_id == uid)
+        .order_by(MediaJob.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [jobstore.public_job(row) for row in rows]
+
+
+def _studio_file_path(output: StudioOutput, kind: str) -> str | None:
+    content = output.content if isinstance(output.content, dict) else {}
+    if kind == "file":
+        return content.get("audio_path") or content.get("video_path") or content.get("png_path")
+    if kind == "svg":
+        return content.get("svg_path")
+    if kind.startswith("slide-"):
+        from pathlib import Path
+        folder = Path(content.get("video_path") or "").parent
+        idx = kind.split("-", 1)[1]
+        candidate = folder / f"slide-{idx}.png"
+        return str(candidate) if candidate.exists() else None
+    return None
+
+
+@router.get("/workspaces/{workspace_id}/studio/{output_id}/file")
+@router.get("/workspaces/{workspace_id}/studio/{output_id}/download")
+def studio_media_file(
+    request: Request,
+    workspace_id: uuid.UUID,
+    output_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    uid = current_user_id(request)
+    ws = _get_owned_workspace(workspace_id, uid, db)
+    output = db.query(StudioOutput).filter_by(id=output_id, workspace_id=ws.id).first()
+    if not output:
+        raise HTTPException(status_code=404, detail="Studio output not found.")
+    path = _studio_file_path(output, "file")
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Generated file is not available.")
+    from fastapi.responses import FileResponse
+    media_type = (output.content or {}).get("media_type") if isinstance(output.content, dict) else None
+    return FileResponse(path, media_type=media_type or "application/octet-stream", filename=os.path.basename(path))
+
+
+@router.get("/workspaces/{workspace_id}/studio/{output_id}/svg")
+def studio_svg(
+    request: Request,
+    workspace_id: uuid.UUID,
+    output_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    uid = current_user_id(request)
+    ws = _get_owned_workspace(workspace_id, uid, db)
+    output = db.query(StudioOutput).filter_by(id=output_id, workspace_id=ws.id).first()
+    if not output:
+        raise HTTPException(status_code=404, detail="Studio output not found.")
+    path = _studio_file_path(output, "svg")
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="SVG is not available.")
+    from fastapi.responses import FileResponse
+    return FileResponse(path, media_type="image/svg+xml", filename="infographic.svg")
+
+
+@router.get("/workspaces/{workspace_id}/studio/{output_id}/slide/{index}")
+def studio_slide(
+    request: Request,
+    workspace_id: uuid.UUID,
+    output_id: uuid.UUID,
+    index: int,
+    db: Session = Depends(get_db),
+):
+    uid = current_user_id(request)
+    ws = _get_owned_workspace(workspace_id, uid, db)
+    output = db.query(StudioOutput).filter_by(id=output_id, workspace_id=ws.id).first()
+    if not output:
+        raise HTTPException(status_code=404, detail="Studio output not found.")
+    path = _studio_file_path(output, f"slide-{index}")
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Slide image is not available.")
+    from fastapi.responses import FileResponse
+    return FileResponse(path, media_type="image/png")

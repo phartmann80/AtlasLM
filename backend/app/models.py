@@ -39,6 +39,13 @@ class Document(Base):
     external_url = Column(String, nullable=True)
     research_query = Column(String, nullable=True)
     
+    storage_path = Column(String(1024), nullable=True)
+    thumbnail_path = Column(String(1024), nullable=True)
+    media_duration_ms = Column(Integer, nullable=True)
+    youtube_video_id = Column(String(32), nullable=True)
+    channel_name = Column(String(255), nullable=True)
+    extra_metadata = Column(JSONB, nullable=True)
+
     workspace = relationship("Workspace", back_populates="documents")
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
 
@@ -57,6 +64,12 @@ class DocumentChunk(Base):
     char_end = Column(Integer, nullable=True)
     sheet = Column(String(100), nullable=True)
     timestamp = Column(Float, nullable=True)
+    source_kind = Column(String(40), nullable=True)
+    speaker = Column(String(64), nullable=True)
+    start_ms = Column(Integer, nullable=True)
+    end_ms = Column(Integer, nullable=True)
+    region = Column(String(40), nullable=True)
+    video_id = Column(String(32), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     document = relationship("Document", back_populates="chunks")
@@ -159,7 +172,7 @@ class StudioOutput(Base):
         ForeignKey("synthesis_nodes.id", ondelete="SET NULL"),
         nullable=True,
     )
-    output_type = Column(String, nullable=False)  # mind_map|study_guide|quiz|flashcards
+    output_type = Column(String, nullable=False)  # mind_map|study_guide|quiz|flashcards|audio_overview|video_overview|infographic
     title = Column(String, nullable=False, default="Untitled")
     status = Column(String, nullable=False, default="pending")  # pending|processing|ready|failed
     content = Column(JSONB, nullable=True)
@@ -289,7 +302,40 @@ class AudioOverviewRow(Base):
     transcript   = Column(JSONB, nullable=False, default=list)
     share_token  = Column(String, unique=True, nullable=True, index=True)
     is_public    = Column(Boolean, nullable=False, default=False)
+    status       = Column(String, nullable=False, default="ready")
+    source_ids   = Column(JSONB, nullable=True)
+    length_minutes = Column(Integer, nullable=True)
+    failure_reason = Column(Text, nullable=True)
+    job_id       = Column(UUID(as_uuid=True), nullable=True)
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class MediaJob(Base):
+    """Long-running media ingest and Studio generation jobs."""
+
+    __tablename__ = "media_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(255), nullable=False, index=True)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
+    studio_output_id = Column(UUID(as_uuid=True), ForeignKey("studio_outputs.id", ondelete="SET NULL"), nullable=True)
+    kind = Column(String(40), nullable=False)
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    stage = Column(String(80), nullable=False, default="queued")
+    retry_count = Column(Integer, nullable=False, default=0)
+    max_retries = Column(Integer, nullable=False, default=2)
+    idempotency_key = Column(String(255), nullable=True)
+    failure_reason = Column(Text, nullable=True)
+    callback_token = Column(String(128), nullable=True, index=True)
+    provider_job_id = Column(String(128), nullable=True, index=True)
+    payload = Column(JSONB, nullable=False, default=dict)
+    result = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class WorkspaceConnection(Base):

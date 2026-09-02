@@ -14,6 +14,7 @@ volumes:
   atlaslm_staging_pgdata:
   atlaslm_staging_redis:
   atlaslm_staging_audio:
+  atlaslm_staging_media:
   atlaslm_staging_caddy_data:
   atlaslm_staging_caddy_config:
 
@@ -127,10 +128,24 @@ services:
       ATLAS_PUBLIC_BACKEND_URL: ${ATLAS_PUBLIC_BACKEND_URL:-https://api.staging.atlaslm.cloud}
       ATLAS_ALLOWED_ORIGINS: ${ATLAS_ALLOWED_ORIGINS:-https://staging.atlaslm.cloud}
       ATLAS_DEFAULT_SEAT_LIMIT: ${ATLAS_DEFAULT_SEAT_LIMIT:-5}
+      GLADIA_API_KEY: ${GLADIA_API_KEY:-}
+      GLADIA_BASE_URL: ${GLADIA_BASE_URL:-https://api.gladia.io}
+      GLADIA_CALLBACK_BASE: ${GLADIA_CALLBACK_BASE:-https://api.staging.atlaslm.cloud}
+      ATLAS_MEDIA_MAX_MB: ${ATLAS_MEDIA_MAX_MB:-2048}
+      ATLAS_MEDIA_MAX_SECONDS: ${ATLAS_MEDIA_MAX_SECONDS:-10800}
+      ATLAS_YTDLP_COOKIES: ${ATLAS_YTDLP_COOKIES:-}
+      ATLAS_MEDIA_CONCURRENT_JOBS: ${ATLAS_MEDIA_CONCURRENT_JOBS:-2}
+      ATLAS_MEDIA_DIR: /data/media
+      ATLAS_KOKORO_MODEL: ${ATLAS_KOKORO_MODEL:-/voices/kokoro-v1.0.onnx}
+      ATLAS_KOKORO_VOICES: ${ATLAS_KOKORO_VOICES:-/voices/voices-v1.0.bin}
+      ATLAS_TTS_VOICE_A: ${ATLAS_TTS_VOICE_A:-af_heart}
+      ATLAS_TTS_VOICE_B: ${ATLAS_TTS_VOICE_B:-am_michael}
+      ATLAS_CHROMIUM_BIN: ${ATLAS_CHROMIUM_BIN:-}
     expose:
       - "8000"
     volumes:
       - atlaslm_staging_audio:/data/audio
+      - atlaslm_staging_media:/data/media
     networks:
       - proxy
       - app
@@ -187,8 +202,22 @@ services:
       ATLAS_TRACE_CONTENT: ${ATLAS_TRACE_CONTENT:-redacted}
       MASTRA_INTERNAL_URL: http://mastra:8110
       ATLAS_INTERNAL_SIGNING_SECRET: ${ATLAS_INTERNAL_SIGNING_SECRET:-}
+      GLADIA_API_KEY: ${GLADIA_API_KEY:-}
+      GLADIA_BASE_URL: ${GLADIA_BASE_URL:-https://api.gladia.io}
+      GLADIA_CALLBACK_BASE: ${GLADIA_CALLBACK_BASE:-https://api.staging.atlaslm.cloud}
+      ATLAS_MEDIA_MAX_MB: ${ATLAS_MEDIA_MAX_MB:-2048}
+      ATLAS_MEDIA_MAX_SECONDS: ${ATLAS_MEDIA_MAX_SECONDS:-10800}
+      ATLAS_YTDLP_COOKIES: ${ATLAS_YTDLP_COOKIES:-}
+      ATLAS_MEDIA_CONCURRENT_JOBS: ${ATLAS_MEDIA_CONCURRENT_JOBS:-2}
+      ATLAS_MEDIA_DIR: /data/media
+      ATLAS_KOKORO_MODEL: ${ATLAS_KOKORO_MODEL:-/voices/kokoro-v1.0.onnx}
+      ATLAS_KOKORO_VOICES: ${ATLAS_KOKORO_VOICES:-/voices/voices-v1.0.bin}
+      ATLAS_TTS_VOICE_A: ${ATLAS_TTS_VOICE_A:-af_heart}
+      ATLAS_TTS_VOICE_B: ${ATLAS_TTS_VOICE_B:-am_michael}
+      ATLAS_CHROMIUM_BIN: ${ATLAS_CHROMIUM_BIN:-}
     volumes:
       - atlaslm_staging_audio:/data/audio
+      - atlaslm_staging_media:/data/media
     networks:
       - app
     depends_on:

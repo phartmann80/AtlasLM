@@ -342,6 +342,19 @@ Do not use a live-mode signing secret on staging.
 | `ATLAS_TRACE_CONTENT` | Fixed non-secret staging value | `redacted` |
 | `RESEARCH_HTTP_TIMEOUT` | Fixed non-secret staging value | `12` |
 | `ATLAS_DEFAULT_SEAT_LIMIT` | Fixed non-secret staging value | `5` |
+| `GLADIA_API_KEY` | Retrieve from Gladia (EU, name `atlaslm-staging`) | Optional until media ingest is enabled; leave empty in the example |
+| `GLADIA_BASE_URL` | Fixed non-secret staging value | `https://api.gladia.io` (no `/v2`; the client appends `/v2/upload` and `/v2/pre-recorded`) |
+| `GLADIA_CALLBACK_BASE` | Fixed non-secret staging value | `https://api.staging.atlaslm.cloud` |
+| `ATLAS_MEDIA_MAX_MB` | Fixed non-secret staging value | `2048` |
+| `ATLAS_MEDIA_MAX_SECONDS` | Fixed non-secret staging value | `10800` |
+| `ATLAS_YTDLP_COOKIES` | Optional host path, root-only | Leave empty unless YouTube audio fallback needs cookies |
+| `ATLAS_MEDIA_CONCURRENT_JOBS` | Fixed non-secret staging value | `2` |
+| `ATLAS_MEDIA_DIR` | Fixed non-secret staging value | `/data/media` |
+| `ATLAS_KOKORO_MODEL` | Fixed non-secret staging value | `/voices/kokoro-v1.0.onnx` |
+| `ATLAS_KOKORO_VOICES` | Fixed non-secret staging value | `/voices/voices-v1.0.bin` |
+| `ATLAS_TTS_VOICE_A` | Fixed non-secret staging value | `af_heart` |
+| `ATLAS_TTS_VOICE_B` | Fixed non-secret staging value | `am_michael` |
+| `ATLAS_CHROMIUM_BIN` | Optional absolute path | Leave empty when `chromium` is on PATH |
 | `DB_PASSWORD` | Generate securely on the server | See generation notes |
 | `JWT_SECRET` | Generate securely on the server | See generation notes |
 | `ATLAS_INTERNAL_SIGNING_SECRET` | Generate securely on the server | See generation notes |

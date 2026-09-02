@@ -53,6 +53,10 @@
     {
       "id": "010_ai_runtime_vertical_slice",
       "path": "migrations/010_ai_runtime_vertical_slice.sql"
+    },
+    {
+      "id": "011_media_jobs_and_studio",
+      "path": "migrations/011_media_jobs_and_studio.sql"
     }
   ]
 }

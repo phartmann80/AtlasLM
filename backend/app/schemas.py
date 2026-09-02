@@ -31,6 +31,12 @@ class DocumentOut(BaseModel):
     status: str = "ready"
     error_message: Optional[str] = None
     created_at: datetime
+    storage_path: Optional[str] = None
+    thumbnail_path: Optional[str] = None
+    media_duration_ms: Optional[int] = None
+    youtube_video_id: Optional[str] = None
+    channel_name: Optional[str] = None
+    extra_metadata: Optional[Any] = None
     
     class Config:
         from_attributes = True
@@ -96,7 +102,10 @@ class TextIngestRequest(BaseModel):
     content: str = Field(..., min_length=1)
     provider: Optional[str] = None
 
-StudioOutputType = Literal["report", "mind_map", "study_guide", "quiz", "flashcards"]
+StudioOutputType = Literal[
+    "report", "mind_map", "study_guide", "quiz", "flashcards",
+    "audio_overview", "video_overview", "infographic",
+]
 
 
 class StudioOutputCreate(BaseModel):
@@ -107,6 +116,7 @@ class StudioOutputCreate(BaseModel):
     synthesis_node_id: UUID | None = None
     source_ids: List[UUID] | None = None
     length: Literal["brief", "standard", "deep"] = "standard"
+    length_minutes: Literal[3, 8, 15] | None = None
     focus: str | None = Field(default=None, max_length=500)
     idempotency_key: str | None = Field(default=None, max_length=255)
 
