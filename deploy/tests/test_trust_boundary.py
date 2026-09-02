@@ -333,6 +333,7 @@ class TrustBoundaryTests(unittest.TestCase):
         message = str(raised.exception)
         self.assertIn("exit 128:", message)
         self.assertIn(" :: ", message)
+        self.assertIn("; see ", message)
         self.assertNotIn("\n", message)
         self.assertTrue(message.split(" :: ", 1)[1].strip())
 
@@ -371,6 +372,50 @@ class TrustBoundaryTests(unittest.TestCase):
         self.assertNotIn("abc123", message)
         self.assertNotIn("zzz", message)
         self.assertIn("<redacted>", message)
+
+    def test_main_sets_umask_022(self) -> None:
+        os.umask(0o077)
+        self._run(["staging", "status"])
+        previous = os.umask(0o022)
+        self.assertEqual(previous, 0o022)
+
+    def test_release_cloned_under_umask_077_is_group_world_readable(self) -> None:
+        self.assertFalse((self.root / "releases" / self.main_sha).exists())
+        old = os.umask(0o077)
+        try:
+            release = CTL.obtain_release(self.main_sha, self.cfg)
+        finally:
+            os.umask(old)
+        for dirpath, dirnames, filenames in os.walk(release, followlinks=False):
+            dmode = stat.S_IMODE(os.stat(dirpath).st_mode)
+            self.assertEqual(dmode & 0o022, 0, dirpath)
+            self.assertEqual(dmode & 0o055, 0o055, dirpath)
+            for name in filenames:
+                entry = Path(dirpath) / name
+                if entry.is_symlink():
+                    continue
+                fmode = stat.S_IMODE(entry.stat().st_mode)
+                self.assertEqual(fmode & 0o022, 0, entry)
+                self.assertEqual(fmode & 0o044, 0o044, entry)
+        CTL.verify_release_tree(release, self.main_sha, self.cfg)
+
+    def test_run_failure_writes_sanitised_last_failure_log(self) -> None:
+        self.cfg.dry_run = False
+        with self.assertRaises(CTL.AtlasLMCtlError) as raised:
+            CTL._run(
+                ["/bin/sh", "-c", "echo SECRET=hunter2 >&2; echo token=abc123 >&2; exit 7"],
+                cfg=self.cfg,
+            )
+        message = str(raised.exception)
+        path = self.root / "runtime" / "last-failure.log"
+        self.assertIn(str(path), message)
+        self.assertTrue(path.is_file())
+        text = path.read_text(encoding="utf-8")
+        self.assertNotIn("hunter2", text)
+        self.assertNotIn("abc123", text)
+        self.assertIn("SECRET=<redacted>", text)
+        self.assertIn("token=<redacted>", text)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
 
 if __name__ == "__main__":

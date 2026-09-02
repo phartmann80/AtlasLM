@@ -266,6 +266,55 @@ def sanitize_log_line(line: str) -> str:
     return redacted.rstrip()
 
 
+def last_failure_log_path(cfg: TrustedConfig | None = None) -> Path:
+    return (cfg or config()).root / "runtime" / "last-failure.log"
+
+
+def write_last_failure(stderr_text: str, cfg: TrustedConfig) -> Path:
+    path = last_failure_log_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        path.unlink()
+    lines = [sanitize_log_line(line) for line in (stderr_text or "").splitlines()]
+    body = "\n".join(lines[-200:])
+    if body and not body.endswith("\n"):
+        body += "\n"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(str(path), flags, 0o600)
+    try:
+        os.write(fd, body.encode("utf-8", errors="replace"))
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)
+    if os.geteuid() == 0 and cfg.required_uid == 0:
+        os.chown(path, 0, 0)
+    return path
+
+
+def _apply_go_rx_no_write(path: Path) -> None:
+    """chmod go+rX and strip group/world write (never group/world writable)."""
+    st = path.lstat()
+    if stat.S_ISLNK(st.st_mode):
+        return
+    mode = stat.S_IMODE(st.st_mode)
+    mode &= ~0o022
+    mode |= 0o044
+    if stat.S_ISDIR(st.st_mode) or (mode & 0o100):
+        mode |= 0o011
+    os.chmod(path, mode)
+
+
+def _record_run_failure(cfg: TrustedConfig, detail: str) -> str:
+    path = None
+    try:
+        path = write_last_failure(detail, cfg)
+    except OSError:
+        path = None
+    return f"; see {path}" if path else ""
+
+
 def _run(
     cmd: Sequence[str],
     *,
@@ -290,14 +339,19 @@ def _run(
             capture_output=True,
         )
     except FileNotFoundError:
-        _fail(f"command not found: {cmd[0]}")
+        suffix = _record_run_failure(cfg, f"command not found: {cmd[0]}")
+        _fail(f"command not found: {cmd[0]}{suffix}")
     except subprocess.CalledProcessError as exc:
+        suffix = _record_run_failure(cfg, exc.stderr or exc.stdout or "")
         detail = ""
         if git:
             lines = [sanitize_log_line(l) for l in (exc.stderr or "").strip().splitlines() if l.strip()]
             tail = " | ".join(lines[-3:])[:400]
             detail = f" :: {tail}" if tail else ""
-        _fail(f"command failed with exit {exc.returncode}: {cmd[0]}{detail}", code=exc.returncode or 1)
+        _fail(
+            f"command failed with exit {exc.returncode}: {cmd[0]}{detail}{suffix}",
+            code=exc.returncode or 1,
+        )
     if capture:
         return completed.stdout.strip()
     return completed.stdout or ""
@@ -432,12 +486,12 @@ def verify_release_tree(
 def _harden_tree_mode(root: Path, cfg: TrustedConfig) -> None:
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         current = Path(dirpath)
-        os.chmod(current, stat.S_IMODE(current.stat().st_mode) & ~0o022)
+        _apply_go_rx_no_write(current)
         for name in filenames:
             entry = current / name
             if entry.is_symlink():
                 continue
-            os.chmod(entry, stat.S_IMODE(entry.stat().st_mode) & ~0o022)
+            _apply_go_rx_no_write(entry)
         if os.geteuid() == 0 and cfg.required_uid == 0:
             os.chown(current, 0, 0)
             for name in [*dirnames, *filenames]:
@@ -617,6 +671,7 @@ def parse_command(argv: Sequence[str]) -> tuple[str, str | None]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    os.umask(0o022)
     argv = list(sys.argv[1:] if argv is None else argv)
     maybe_reexec_isolated(argv)
     try:
