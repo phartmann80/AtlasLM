@@ -5,6 +5,17 @@
 
 {$STAGING_API_HOST:api.staging.atlaslm.cloud} {
 	encode gzip
+	# Access logs must not record Gladia callback tokens
+	# (/api/v1/internal/media/stt-callback?token=). The backend still
+	# receives the original query string.
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>uri query delete
+			}
+		}
+	}
 	request_body {
 		max_size 2GB
 	}
