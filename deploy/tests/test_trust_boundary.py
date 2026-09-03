@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from test_deploy_hardening import CTL, ROOT, CANARY
 
@@ -296,6 +297,80 @@ class TrustBoundaryTests(unittest.TestCase):
         code, _, err = self._run(["production", "deploy", self.main_sha])
         self.assertEqual(code, 2)
         self.assertIn("rejected argument", err)
+
+    def test_git_clone_uses_http11(self) -> None:
+        self.cfg.dry_run = False
+        release = CTL.obtain_release(self.main_sha, self.cfg)
+        self.assertTrue(release.is_dir())
+        clone_cmds = [cmd for cmd in self.log if len(cmd) >= 4 and cmd[3] == "clone"]
+        self.assertEqual(len(clone_cmds), 1, self.log)
+        expected_tmp = str(self.root / "releases" / f".tmp-{self.main_sha}-{os.getpid()}")
+        self.assertEqual(
+            clone_cmds[0],
+            [
+                self.cfg.git_bin,
+                "-c",
+                "http.version=HTTP/1.1",
+                "clone",
+                "--quiet",
+                str(self.origin),
+                expected_tmp,
+            ],
+        )
+
+    def test_every_git_command_has_http11(self) -> None:
+        code, _, err = self._run(["staging", "deploy", self.main_sha])
+        self.assertEqual(code, 0, err)
+        git_cmds = [cmd for cmd in self.log if cmd and cmd[0] == self.cfg.git_bin]
+        self.assertTrue(git_cmds)
+        for cmd in git_cmds:
+            self.assertEqual(cmd[1:3], ["-c", "http.version=HTTP/1.1"], cmd)
+
+    def test_clone_failure_surfaces_stderr_tail(self) -> None:
+        self.cfg.git_remote = str(self.tmp / "does-not-exist.git")
+        with self.assertRaises(CTL.AtlasLMCtlError) as raised:
+            CTL.cmd_deploy(self.main_sha)
+        message = str(raised.exception)
+        self.assertIn("exit 128:", message)
+        self.assertIn(" :: ", message)
+        self.assertNotIn("\n", message)
+        self.assertTrue(message.split(" :: ", 1)[1].strip())
+
+    def test_non_git_failure_stays_opaque(self) -> None:
+        self.cfg.dry_run = False
+        error = subprocess.CalledProcessError(
+            1,
+            [self.cfg.docker_bin],
+            stderr=f"line 2: unexpected character in {CANARY}\n",
+        )
+        compose = [
+            self.cfg.docker_bin,
+            "compose",
+            "--env-file",
+            str(self.cfg.env_file),
+            "ps",
+        ]
+        with patch.object(CTL.subprocess, "run", side_effect=error):
+            with self.assertRaises(CTL.AtlasLMCtlError) as raised:
+                CTL._run(compose, cfg=self.cfg, git=False)
+        message = str(raised.exception)
+        self.assertNotIn(CANARY, message)
+        self.assertNotIn(" :: ", message)
+        self.assertIn("command failed with exit 1:", message)
+
+    def test_failure_redacts_token_and_gladia_key(self) -> None:
+        error = subprocess.CalledProcessError(
+            1,
+            [self.cfg.git_bin],
+            stderr="token=abc123\nx-gladia-key: zzz\n",
+        )
+        with patch.object(CTL.subprocess, "run", side_effect=error):
+            with self.assertRaises(CTL.AtlasLMCtlError) as raised:
+                CTL._run([self.cfg.git_bin, "status"], cfg=self.cfg, git=True)
+        message = str(raised.exception)
+        self.assertNotIn("abc123", message)
+        self.assertNotIn("zzz", message)
+        self.assertIn("<redacted>", message)
 
 
 if __name__ == "__main__":
