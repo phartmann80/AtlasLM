@@ -283,8 +283,27 @@ class TrustBoundaryTests(unittest.TestCase):
         code, _, err = self._run(["staging", "deploy", self.main_sha])
         self.assertEqual(code, 0, err)
         self.log.clear()
-        code, _, err = self._run(["staging", "status"])
+        fake_ps = (
+            "NAME                           STATUS              PORTS\n"
+            "atlaslm-staging-backend-1      Up (healthy)        8000/tcp\n"
+        )
+        original_run = CTL.subprocess.run
+
+        def run_docker_or_real(cmd, **kwargs):
+            if cmd and cmd[0] in {self.cfg.docker_bin, "docker"}:
+                return subprocess.CompletedProcess(list(cmd), 0, stdout=fake_ps, stderr="")
+            return original_run(cmd, **kwargs)
+
+        self.cfg.dry_run = False
+        try:
+            with patch.object(CTL.subprocess, "run", side_effect=run_docker_or_real):
+                code, out, err = self._run(["staging", "status"])
+        finally:
+            self.cfg.dry_run = True
         self.assertEqual(code, 0, err)
+        self.assertTrue(out.strip())
+        self.assertIn("atlaslm-staging-backend-1", out)
+        self.assertNotIn(CANARY, out + err)
         joined = " ".join(" ".join(cmd) for cmd in self.log)
         self.assertIn(str(self.root / "releases" / self.main_sha / "deploy" / "staging" / "docker-compose.yaml"), joined)
         self.assertNotIn("/incoming/", joined)

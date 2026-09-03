@@ -638,7 +638,9 @@ def cmd_status() -> None:
     cfg = config()
     release = active_release(cfg)
     compose = compose_command(release, cfg)
-    _run(compose + ["ps"], cfg=cfg, extra_env={"ATLAS_RELEASE_SHA": release.name})
+    output = _run(compose + ["ps"], cfg=cfg, extra_env={"ATLAS_RELEASE_SHA": release.name})
+    if output:
+        sys.stdout.write(output if output.endswith("\n") else output + "\n")
 
 
 def cmd_logs() -> None:
